@@ -20,5 +20,13 @@ class UnresolvedQueryError(ValueError):
         self.query_input = query_input
 
 
+class SearchIndexNotReadyError(RuntimeError):
+    """Raised when hybrid search is configured without compatible artifacts."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"Hybrid search index is unavailable: {detail}")
+        self.detail = detail
+
+
 class IdempotencyConflictError(ValueError):
     """Raised when one event ID is reused for different semantic payloads."""

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.app.config import SearchRetrievalMode
 from backend.app.repositories._utils import placeholders
 from backend.app.schemas.common import TopicCard
 from backend.app.schemas.event import SearchQueryTopic
 from backend.app.schemas.search import SearchMatchedTopic
+from backend.app.search_retrieval import HybridHit
 
 
 def load_answer_ids_for_topics(
@@ -336,8 +338,29 @@ def load_search_candidates(
     query_key: str,
     page_size: int,
     query_text: str | None = None,
+    *,
+    retrieval_mode: SearchRetrievalMode = "lexical_v1",
+    hybrid_hits: tuple[HybridHit, ...] = (),
 ) -> dict[int, dict[str, Any]]:
     limit = max(page_size * 20, 50)
+    if hybrid_hits:
+        return {
+            hit.article_id: {
+                "source": (
+                    "bm25+dense"
+                    if hit.bm25_rank is not None and hit.dense_rank is not None
+                    else "bm25"
+                    if hit.bm25_rank is not None
+                    else "dense"
+                ),
+                "topic_match_score": 0.0,
+                "bm25_score": hit.bm25_score,
+                "dense_score": hit.dense_score,
+                "hybrid_score": hit.fusion_score,
+            }
+            for hit in hybrid_hits[:limit]
+        }
+
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -361,12 +384,16 @@ def load_search_candidates(
         int(row["answer_id"]): {
             "source": "topic_lookup",
             "topic_match_score": float(row.get("topic_match_score") or 0.0),
-            "hot_score": float(row.get("hot_score") or 0.0),
+            "bm25_score": 0.0,
+            "dense_score": 0.0,
+            "hybrid_score": 0.0,
         }
         for row in rows
     }
 
-    normalized_text = " ".join((query_text or "").lower().split())
+    normalized_text = (
+        " ".join((query_text or "").lower().split()) if retrieval_mode == "lexical_v1" else ""
+    )
     tokens = [token for token in normalized_text.split() if len(token) >= 3][:5]
     search_terms = [term for term in (normalized_text, *tokens) if len(term) >= 3]
     search_terms = list(dict.fromkeys(search_terms))
@@ -415,7 +442,9 @@ def load_search_candidates(
                 {
                     "source": "lexical_match",
                     "topic_match_score": 0.0,
-                    "hot_score": float(row.get("hot_score") or 0.0),
+                    "bm25_score": 0.0,
+                    "dense_score": 0.0,
+                    "hybrid_score": 0.0,
                 },
             )
             if is_new:
@@ -426,15 +455,5 @@ def load_search_candidates(
                 float(candidate["topic_match_score"]),
                 lexical_score,
             )
-
-    if len(candidates) < page_size:
-        for row in load_hot_fallback_rows(connection, max(page_size * 5, 20)):
-            if len(candidates) >= page_size:
-                break
-            candidates[int(row["answer_id"])] = {
-                "source": "hot_backfill",
-                "topic_match_score": 0.0,
-                "hot_score": float(row.get("hot_score") or 0.0),
-            }
 
     return candidates

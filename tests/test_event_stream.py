@@ -21,6 +21,19 @@ def test_parse_event_mode_rejects_unknown_value():
         parse_event_mode("definitely_not_a_mode")
 
 
+def test_search_retrieval_defaults_to_hybrid():
+    from backend.app.config import Settings
+
+    assert Settings().search_retrieval_mode == "hybrid_v1"
+
+
+def test_parse_search_retrieval_mode_rejects_unknown_value():
+    from backend.app.config import parse_search_retrieval_mode
+
+    with pytest.raises(ValueError):
+        parse_search_retrieval_mode("semantic_magic")
+
+
 def test_user_event_message_serializes_partition_key_and_optional_fields():
     from backend.app.events.schema import UserEventMessage
 

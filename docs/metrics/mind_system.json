@@ -5,11 +5,19 @@
     "p50_ms": 9.467,
     "p95_ms": 14.177
   },
-  "limitations": "Local demo latency only; not a production capacity or tail-latency claim.",
-  "search": {
+  "hybrid_retrieval": {
+    "corpus_document_count": 174,
+    "iterations": 100,
+    "p50_ms": 6.433,
+    "p95_ms": 9.568,
+    "scope": "warm in-process retrieval; excludes HTTP, MySQL, and event writes"
+  },
+  "limitations": "Local demo measurements only; not a production capacity or tail-latency claim.",
+  "search_api_legacy_lexical": {
     "iterations": 30,
     "p50_ms": 6.013,
-    "p95_ms": 7.867
+    "p95_ms": 7.867,
+    "status": "superseded after hybrid search became the default"
   },
   "user_id": 72148
 }

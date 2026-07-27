@@ -9,7 +9,7 @@ the default (non-mysql) pytest layer.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -100,3 +100,33 @@ def ndcg_at_k(predicted: Sequence[int], relevant: Iterable[int], k: int) -> floa
     ideal_hits = min(len(rel_set), k)
     idcg = sum(1.0 / math.log2(i + 1) for i in range(1, ideal_hits + 1))
     return dcg / idcg if idcg > 0 else 0.0
+
+
+def graded_ndcg_at_k(
+    predicted: Sequence[int],
+    relevance: Mapping[int, float],
+    k: int,
+) -> float:
+    if k <= 0 or not relevance:
+        return 0.0
+    top_k = list(predicted)[:k]
+    dcg = sum(
+        (2.0 ** float(relevance.get(article_id, 0.0)) - 1.0) / math.log2(rank + 1)
+        for rank, article_id in enumerate(top_k, start=1)
+    )
+    ideal_gains = sorted(
+        (2.0 ** float(value) - 1.0 for value in relevance.values() if value > 0),
+        reverse=True,
+    )[:k]
+    idcg = sum(gain / math.log2(rank + 1) for rank, gain in enumerate(ideal_gains, start=1))
+    return dcg / idcg if idcg > 0 else 0.0
+
+
+def mrr_at_k(predicted: Sequence[int], relevant: Iterable[int], k: int) -> float:
+    if k <= 0:
+        return 0.0
+    relevant_ids = set(relevant)
+    for rank, article_id in enumerate(list(predicted)[:k], start=1):
+        if article_id in relevant_ids:
+            return 1.0 / rank
+    return 0.0

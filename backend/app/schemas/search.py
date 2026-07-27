@@ -41,7 +41,9 @@ class SearchRequest(ApiModel):
 
 class SearchItemScores(ApiModel):
     topic_match_score: float
-    hot_backfill_score: float
+    bm25_score: float = 0.0
+    dense_score: float = 0.0
+    hybrid_score: float = 0.0
     final_score: float
 
 
@@ -65,9 +67,19 @@ class SearchResultSource(ApiModel):
     source: str
 
 
+class SearchArtifactDebug(ApiModel):
+    model_id: str
+    model_revision: str
+    source_fingerprint: str
+
+
 class SearchDebugPayload(ApiModel):
     matched_topics: list[SearchMatchedTopic]
     result_sources: list[SearchResultSource]
+    retrieval_mode: str = "lexical_v1"
+    resolution_source: str = "unknown"
+    resolution_confidence: float = 0.0
+    artifact: SearchArtifactDebug | None = None
 
 
 class SearchResponse(ApiModel):

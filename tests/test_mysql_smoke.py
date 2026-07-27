@@ -71,10 +71,7 @@ def test_search_then_feed_shows_recall_candidates(mysql_client, mysql_demo_user)
         params={"user_id": mysql_demo_user, "page_size": 1},
     ).json()
     article = feed_before["items"][0]
-    query_text = max(
-        (word.strip(".,:;!?()[]{}\"'") for word in article["headline"].split()),
-        key=len,
-    )
+    query_text = article["headline"]
     search_resp = mysql_client.post(
         "/search",
         json={
@@ -86,8 +83,9 @@ def test_search_then_feed_shows_recall_candidates(mysql_client, mysql_demo_user)
     )
     assert search_resp.status_code == 200
     assert len(search_resp.json()["items"]) > 0
+    assert search_resp.json()["items"][0]["article_id"] == article["article_id"]
     assert any(
-        "lexical_match" in source["source"]
+        source["source"] in {"bm25", "dense", "bm25+dense"}
         for source in search_resp.json()["debug"]["result_sources"]
     )
 
@@ -104,6 +102,31 @@ def test_search_then_feed_shows_recall_candidates(mysql_client, mysql_demo_user)
         params={"user_id": mysql_demo_user},
     ).json()
     assert profile["recent_queries"][0]["query_key"] == search_resp.json()["query_key"]
+
+
+def test_rejected_hybrid_query_does_not_mutate_profile(mysql_client, mysql_demo_user):
+    before = mysql_client.get(
+        "/debug/profile",
+        params={"user_id": mysql_demo_user},
+    ).json()
+
+    response = mysql_client.post(
+        "/search",
+        json={
+            "user_id": mysql_demo_user,
+            "query_text": "kubernetes ingress controller tls termination",
+            "page_size": 10,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "unresolved_query"
+    after = mysql_client.get(
+        "/debug/profile",
+        params={"user_id": mysql_demo_user},
+    ).json()
+    assert after["behavior_score"] == before["behavior_score"]
+    assert after["recent_queries"] == before["recent_queries"]
 
 
 def test_duplicate_search_event_updates_profile_once(mysql_client, mysql_demo_user):

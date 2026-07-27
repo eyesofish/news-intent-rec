@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 EventMode = Literal["sync_mysql", "kafka_dual_write", "kafka_async"]
+SearchRetrievalMode = Literal["lexical_v1", "hybrid_v1"]
 logger = logging.getLogger(__name__)
 _DEPRECATED_ENV_WARNINGS: set[str] = set()
 
@@ -18,6 +19,13 @@ def parse_event_mode(value: str) -> EventMode:
     if normalized in {"sync_mysql", "kafka_dual_write", "kafka_async"}:
         return cast(EventMode, normalized)
     raise ValueError("NEWSREC_EVENT_MODE must be one of: sync_mysql, kafka_dual_write, kafka_async")
+
+
+def parse_search_retrieval_mode(value: str) -> SearchRetrievalMode:
+    normalized = value.strip().lower()
+    if normalized in {"lexical_v1", "hybrid_v1"}:
+        return cast(SearchRetrievalMode, normalized)
+    raise ValueError("NEWSREC_SEARCH_RETRIEVAL_MODE must be lexical_v1 or hybrid_v1")
 
 
 def _env_optional(name: str) -> str | None:
@@ -64,6 +72,18 @@ def _seed_demo_user_id(seed_dir: str) -> int:
     return 7001
 
 
+def _seed_source_fingerprint(seed_dir: str) -> str | None:
+    path = Path(seed_dir) / "manifest.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        value = str(payload.get("source_fingerprint") or "").strip()
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid demo manifest {path}: {exc}") from exc
+    return value or None
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "NewsIntentRec Backend"
@@ -91,6 +111,9 @@ class Settings:
     cold_start_default_seed_key: str = "cold_start_default"
     als_recall_top_k: int = 200
     als_recall_enabled: bool = True
+    search_retrieval_mode: SearchRetrievalMode = "hybrid_v1"
+    search_index_dir: str = "build/mind_search/demo"
+    search_source_fingerprint: str | None = None
     event_mode: EventMode = "sync_mysql"
     kafka_bootstrap_servers: str = "127.0.0.1:9092"
     kafka_client_id: str = "newsrec-api"
@@ -185,6 +208,11 @@ def get_settings() -> Settings:
         ),
         als_recall_top_k=int(_env("NEWSREC_ALS_RECALL_TOP_K", "200")),
         als_recall_enabled=_env_bool("NEWSREC_ALS_RECALL_ENABLED", "1"),
+        search_retrieval_mode=parse_search_retrieval_mode(
+            _env("NEWSREC_SEARCH_RETRIEVAL_MODE", "hybrid_v1")
+        ),
+        search_index_dir=_env("NEWSREC_SEARCH_INDEX_DIR", "build/mind_search/demo"),
+        search_source_fingerprint=_seed_source_fingerprint(demo_seed_dir),
         event_mode=parse_event_mode(_env("NEWSREC_EVENT_MODE", "sync_mysql")),
         kafka_bootstrap_servers=_env(
             "NEWSREC_KAFKA_BOOTSTRAP_SERVERS",

@@ -1,0 +1,10 @@
+{
+  "bm25_weight": 1.0,
+  "candidate_k": 50,
+  "dense_weight": 0.5,
+  "min_bm25_score": 8.0,
+  "min_dense_score": 0.4,
+  "min_dense_score_with_bm25": 0.3,
+  "min_fusion_margin": 0.004,
+  "rrf_k": 10
+}

@@ -1,16 +1,32 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
-from backend.app.errors import UnresolvedQueryError
+from backend.app.config import SearchRetrievalMode
+from backend.app.errors import SearchIndexNotReadyError, UnresolvedQueryError
 from backend.app.repositories._utils import (
     is_numeric_query_key,
     normalize_query_key,
     placeholders,
 )
+from backend.app.search_retrieval import HybridHit, HybridSearchIndex
 
 
-def _match_display_query(connection: Any, text: str) -> str | None:
+@dataclass(frozen=True)
+class QueryResolution:
+    query_key: str
+    source: str
+    confidence: float = 1.0
+    hybrid_hits: tuple[HybridHit, ...] = ()
+
+
+def _match_display_query(
+    connection: Any,
+    text: str,
+    *,
+    exact_only: bool = False,
+) -> str | None:
     """Try to resolve ``text`` against ``query_topic_map.display_query``.
 
     Runs three SQL passes (exact case-insensitive, prefix, contains) and
@@ -25,6 +41,8 @@ def _match_display_query(connection: Any, text: str) -> str | None:
         ("LOWER(display_query) LIKE %s", (like_prefix,)),
         ("LOWER(display_query) LIKE %s", (like_contains,)),
     ]
+    if exact_only:
+        passes = passes[:1]
     for predicate, params in passes:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -44,7 +62,12 @@ def _match_display_query(connection: Any, text: str) -> str | None:
     return None
 
 
-def _match_topic_display_name(connection: Any, text: str) -> str | None:
+def _match_topic_display_name(
+    connection: Any,
+    text: str,
+    *,
+    exact_only: bool = False,
+) -> str | None:
     """Try to resolve ``text`` via ``topic.display_name`` → best query_key.
 
     Same three-stage chain (exact → prefix → contains). At each stage we
@@ -59,6 +82,8 @@ def _match_topic_display_name(connection: Any, text: str) -> str | None:
         ("LOWER(display_name) LIKE %s", (like_prefix,)),
         ("LOWER(display_name) LIKE %s", (like_contains,)),
     ]
+    if exact_only:
+        passes = passes[:1]
     for predicate, params in passes:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -125,6 +150,132 @@ def _match_article_text(connection: Any, text: str) -> str | None:
     return str(row["query_key"]) if row else None
 
 
+def _query_key_from_hybrid_hits(
+    connection: Any,
+    hits: tuple[HybridHit, ...],
+) -> str | None:
+    selected_hits = hits[:10]
+    if not selected_hits:
+        return None
+    score_by_article = {hit.article_id: max(hit.fusion_score, 1e-9) for hit in selected_hits}
+    article_ids = list(score_by_article)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT answer_id, topic_id, source_rank
+            FROM answer_topic
+            WHERE answer_id IN ({placeholders(article_ids)})
+            ORDER BY answer_id, source_rank ASC, topic_id ASC
+            """,
+            tuple(article_ids),
+        )
+        topic_rows = cursor.fetchall()
+    topic_scores: dict[int, float] = {}
+    first_topic_id: int | None = None
+    any_topic_id: int | None = None
+    top_article_id = selected_hits[0].article_id
+    for row in topic_rows:
+        article_id = int(row["answer_id"])
+        article_score = score_by_article.get(article_id, 0.0)
+        source_weight = 1.25 if int(row.get("source_rank") or 0) > 0 else 1.0
+        topic_id = int(row["topic_id"])
+        if any_topic_id is None:
+            any_topic_id = topic_id
+        if first_topic_id is None and article_id == top_article_id:
+            first_topic_id = topic_id
+        topic_scores[topic_id] = topic_scores.get(topic_id, 0.0) + (article_score * source_weight)
+    if not topic_scores:
+        return None
+    if first_topic_id is None:
+        first_topic_id = any_topic_id
+
+    topic_ids = list(topic_scores)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT query_key, topic_id, score, match_rank
+            FROM query_topic_map
+            WHERE topic_id IN ({placeholders(topic_ids)})
+            ORDER BY query_key ASC, match_rank ASC
+            """,
+            tuple(topic_ids),
+        )
+        query_rows = cursor.fetchall()
+    candidates = [
+        (
+            topic_scores[int(row["topic_id"])] * float(row.get("score") or 0.0),
+            int(row.get("match_rank") or 0),
+            str(row["query_key"]),
+        )
+        for row in query_rows
+    ]
+    if not candidates:
+        if first_topic_id is None:
+            return None
+        return str(first_topic_id)
+    _score, _rank, query_key = sorted(
+        candidates,
+        key=lambda row: (-row[0], row[1], row[2]),
+    )[0]
+    return query_key
+
+
+def resolve_search_query(
+    connection: Any,
+    query_key: str | None,
+    query_text: str | None,
+    *,
+    retrieval_mode: SearchRetrievalMode,
+    hybrid_index: HybridSearchIndex | None = None,
+    hybrid_limit: int = 200,
+) -> QueryResolution:
+    if query_key and is_numeric_query_key(query_key):
+        return QueryResolution(
+            query_key=normalize_query_key(query_key),
+            source="numeric_query_key",
+        )
+
+    candidate = (query_text or query_key or "").strip()
+    if not candidate:
+        raise UnresolvedQueryError(candidate)
+
+    if retrieval_mode == "hybrid_v1":
+        resolved = _match_display_query(connection, candidate, exact_only=True)
+        if resolved is None:
+            resolved = _match_topic_display_name(connection, candidate, exact_only=True)
+        if resolved is not None:
+            return QueryResolution(
+                query_key=normalize_query_key(resolved),
+                source="exact_alias",
+            )
+        if hybrid_index is None:
+            raise SearchIndexNotReadyError("artifact loader returned no index")
+        result = hybrid_index.search(candidate, limit=hybrid_limit)
+        if not result.accepted:
+            raise UnresolvedQueryError(candidate)
+        resolved = _query_key_from_hybrid_hits(connection, result.hits)
+        if resolved is None:
+            raise UnresolvedQueryError(candidate)
+        return QueryResolution(
+            query_key=normalize_query_key(resolved),
+            source="hybrid_v1",
+            confidence=result.top_dense_score,
+            hybrid_hits=result.hits,
+        )
+
+    resolved = _match_display_query(connection, candidate)
+    if resolved is None:
+        resolved = _match_topic_display_name(connection, candidate)
+    if resolved is None:
+        resolved = _match_article_text(connection, candidate)
+    if resolved is None:
+        raise UnresolvedQueryError(candidate)
+    return QueryResolution(
+        query_key=normalize_query_key(resolved),
+        source="lexical_v1",
+    )
+
+
 def resolve_query_key(
     connection: Any,
     query_key: str | None,
@@ -141,18 +292,9 @@ def resolve_query_key(
     4. Fall back to real article headline/abstract lexical matches.
     5. If nothing matches, raise :class:`UnresolvedQueryError`.
     """
-    if query_key and is_numeric_query_key(query_key):
-        return normalize_query_key(query_key)
-
-    candidate = (query_text or query_key or "").strip()
-    if not candidate:
-        raise UnresolvedQueryError(candidate)
-
-    resolved = _match_display_query(connection, candidate)
-    if resolved is None:
-        resolved = _match_topic_display_name(connection, candidate)
-    if resolved is None:
-        resolved = _match_article_text(connection, candidate)
-    if resolved is None:
-        raise UnresolvedQueryError(candidate)
-    return normalize_query_key(resolved)
+    return resolve_search_query(
+        connection,
+        query_key,
+        query_text,
+        retrieval_mode="lexical_v1",
+    ).query_key

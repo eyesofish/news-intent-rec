@@ -26,6 +26,8 @@ Key variables:
 - `NEWSREC_DATABASE_URL`
 - `NEWSREC_DEMO_SEED_DIR` (default `build/mind_demo_world`)
 - `NEWSREC_MODEL_DIR` (default `build/mind_models`)
+- `NEWSREC_SEARCH_RETRIEVAL_MODE` (default `hybrid_v1`)
+- `NEWSREC_SEARCH_INDEX_DIR` (default `build/mind_search/demo`)
 - `NEWSREC_EVENT_MODE`
 - `NEWSREC_KAFKA_*`
 - `VITE_NEWSREC_API_BASE`
@@ -39,6 +41,18 @@ python scripts/download_mind.py --variant small --split all --accept-license --s
 python scripts/inspect_mind.py --variant small
 python scripts/normalize_mind.py
 python scripts/build_mind_demo_world.py
+python scripts/build_search_index.py \
+  --corpus full \
+  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+  --config evaluation/search_relevance/selected_config.json
+python scripts/calibrate_search_relevance.py
+python scripts/eval_search_relevance.py \
+  --config evaluation/search_relevance/selected_config.json
+python scripts/build_search_index.py \
+  --corpus demo \
+  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+  --config evaluation/search_relevance/selected_config.json \
+  --online-config evaluation/search_relevance/online_demo_config.json
 python scripts/import_demo_world.py \
   --input-dir build/mind_demo_world \
   --output-sql build/mind_demo_world/import_demo_world.sql \
@@ -53,6 +67,11 @@ python scripts/report_mind_data.py
 docker compose up -d
 export NEWSREC_DATABASE_URL='mysql+pymysql://root:root@127.0.0.1:3306/newsrec_demo'
 python scripts/apply_demo_mysql.py
+python scripts/build_search_index.py \
+  --corpus demo \
+  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+  --config evaluation/search_relevance/selected_config.json \
+  --online-config evaluation/search_relevance/online_demo_config.json
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -76,4 +95,6 @@ python -m pytest -q
 cd product-frontend && npm test -- --run && npm run build
 ```
 
-Health endpoints: `/livez`, `/readyz`, `/healthz`, and `/metrics`.
+Health endpoints: `/livez`, `/readyz`, `/healthz`, and `/metrics`. When hybrid search
+is enabled, readiness also validates the search artifact fingerprint, file hashes,
+FAISS row count, and locally cached encoder revision.

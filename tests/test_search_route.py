@@ -83,6 +83,20 @@ def test_search_unresolved_text_returns_422_with_error_code():
     assert captured["payload"].query_text == "xyzzy-not-a-topic"
 
 
+def test_search_missing_hybrid_artifact_returns_503():
+    from backend.app.errors import SearchIndexNotReadyError
+    from backend.app.schemas.search import SearchRequest
+
+    def fake_search(_payload: SearchRequest):
+        raise SearchIndexNotReadyError("metadata.json is missing")
+
+    client = _make_client(fake_search)
+    response = client.post("/search", json={"user_id": 7248, "query_text": "football tactics"})
+
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "search_index_not_ready"
+
+
 def test_search_numeric_query_key_reaches_repository():
     from backend.app.schemas.common import TopicCard
     from backend.app.schemas.search import (
@@ -108,7 +122,11 @@ def test_search_numeric_query_key_reaches_repository():
                     source_domain="example.com",
                     categories=[TopicCard(topic_id=3, display_name="Falafel")],
                     scores=SearchItemScores(
-                        topic_match_score=1.0, hot_backfill_score=0.0, final_score=1.0
+                        topic_match_score=1.0,
+                        bm25_score=0.0,
+                        dense_score=0.0,
+                        hybrid_score=0.0,
+                        final_score=1.0,
                     ),
                 )
             ],

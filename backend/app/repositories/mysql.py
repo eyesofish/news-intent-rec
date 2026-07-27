@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any, cast
 
 from backend.app.config import Settings, compute_alpha
+from backend.app.errors import SearchIndexNotReadyError, UnresolvedQueryError
 from backend.app.events.outbox import enqueue_outbox_message
 from backend.app.events.schema import UserEventMessage, UserEventType
+from backend.app.observability import SEARCH_RESOLUTIONS, SEARCH_RETRIEVAL_DURATION
 from backend.app.repositories._utils import (
     add_feed_candidate,
+    is_numeric_query_key,
     new_request_id,
     normalize_query_key,
     parse_topic_weights,
@@ -44,7 +48,7 @@ from backend.app.repositories.profile_dao import (
     load_recent_query_topic_scores,
     profile_from_row,
 )
-from backend.app.repositories.query_resolver import resolve_query_key
+from backend.app.repositories.query_resolver import resolve_search_query
 from backend.app.repositories.ranker import (
     build_feature_dict,
     loaded_model_metadata,
@@ -94,6 +98,7 @@ from backend.app.schemas.feed import (
 from backend.app.schemas.persona import PersonaCard, PersonaListResponse
 from backend.app.schemas.profile import DebugProfileResponse
 from backend.app.schemas.search import (
+    SearchArtifactDebug,
     SearchDebugPayload,
     SearchItem,
     SearchItemScores,
@@ -102,6 +107,10 @@ from backend.app.schemas.search import (
     SearchResultSource,
 )
 from backend.app.schemas.suggestion import SuggestionItem, SuggestionListResponse
+from backend.app.search_retrieval import (
+    SearchArtifactError,
+    load_hybrid_search_index,
+)
 
 
 class MysqlRuntimeRepository(RuntimeRepository):
@@ -515,7 +524,53 @@ class MysqlRuntimeRepository(RuntimeRepository):
         )
         connection = self._connection_pool.connect()
         try:
-            query_key = resolve_query_key(connection, payload.query_key, payload.query_text)
+            resolution_started = time.perf_counter()
+            try:
+                hybrid_index = None
+                needs_hybrid_index = self._settings.search_retrieval_mode == "hybrid_v1" and not (
+                    payload.query_key and is_numeric_query_key(payload.query_key)
+                )
+                if needs_hybrid_index:
+                    try:
+                        hybrid_index = load_hybrid_search_index(
+                            Path(self._settings.search_index_dir),
+                            expected_source_fingerprint=(self._settings.search_source_fingerprint),
+                        )
+                    except SearchArtifactError as exc:
+                        raise SearchIndexNotReadyError(str(exc)) from exc
+                resolution = resolve_search_query(
+                    connection,
+                    payload.query_key,
+                    payload.query_text,
+                    retrieval_mode=self._settings.search_retrieval_mode,
+                    hybrid_index=hybrid_index,
+                    hybrid_limit=max(payload.page_size * 20, 50),
+                )
+            except UnresolvedQueryError:
+                SEARCH_RESOLUTIONS.labels(
+                    mode=self._settings.search_retrieval_mode,
+                    source="unresolved",
+                    outcome="rejected",
+                ).inc()
+                raise
+            except SearchIndexNotReadyError:
+                SEARCH_RESOLUTIONS.labels(
+                    mode=self._settings.search_retrieval_mode,
+                    source="artifact",
+                    outcome="error",
+                ).inc()
+                raise
+            else:
+                SEARCH_RESOLUTIONS.labels(
+                    mode=self._settings.search_retrieval_mode,
+                    source=resolution.source,
+                    outcome="accepted",
+                ).inc()
+            finally:
+                SEARCH_RETRIEVAL_DURATION.labels(mode=self._settings.search_retrieval_mode).observe(
+                    time.perf_counter() - resolution_started
+                )
+            query_key = resolution.query_key
             event = self._event_message(
                 event_type="search_query",
                 user_id=payload.user_id,
@@ -557,28 +612,24 @@ class MysqlRuntimeRepository(RuntimeRepository):
                 query_key=query_key,
                 page_size=payload.page_size,
                 query_text=payload.query_text,
+                retrieval_mode=self._settings.search_retrieval_mode,
+                hybrid_hits=resolution.hybrid_hits,
             )
             answer_ids = [answer_id for answer_id in search_candidates]
             answer_rows = load_answer_rows(connection, answer_ids)
             topics_by_answer = load_topics_by_answer(connection, answer_ids)
 
-            max_hot_score = max(
-                [float(candidate["hot_score"]) for candidate in search_candidates.values()] + [1.0]
-            )
-            scored_items: list[tuple[bool, SearchItem, SearchResultSource]] = []
+            scored_items: list[tuple[SearchItem, SearchResultSource]] = []
             for answer_id, candidate in search_candidates.items():
                 row = answer_rows.get(answer_id)
                 if row is None:
                     continue
 
-                is_fallback = candidate["source"] == "hot_backfill"
                 topic_match_score = round(float(candidate["topic_match_score"]), 6)
-                hot_backfill_score = (
-                    round(float(candidate["hot_score"]) / max_hot_score, 6)
-                    if is_fallback and max_hot_score > 0
-                    else 0.0
-                )
-                final_score = round(topic_match_score + hot_backfill_score, 6)
+                bm25_score = round(float(candidate.get("bm25_score") or 0.0), 6)
+                dense_score = round(float(candidate.get("dense_score") or 0.0), 6)
+                hybrid_score = round(float(candidate.get("hybrid_score") or 0.0), 9)
+                final_score = hybrid_score if hybrid_score > 0 else topic_match_score
                 item = SearchItem(
                     article_id=answer_id,
                     headline=row.get("headline") or f"Article {answer_id}",
@@ -587,30 +638,41 @@ class MysqlRuntimeRepository(RuntimeRepository):
                     categories=topics_by_answer.get(answer_id, []),
                     scores=SearchItemScores(
                         topic_match_score=topic_match_score,
-                        hot_backfill_score=hot_backfill_score,
+                        bm25_score=bm25_score,
+                        dense_score=dense_score,
+                        hybrid_score=hybrid_score,
                         final_score=final_score,
                     ),
                 )
                 scored_items.append(
                     (
-                        is_fallback,
                         item,
                         SearchResultSource(article_id=answer_id, source=candidate["source"]),
                     )
                 )
 
-            scored_items.sort(
-                key=lambda pair: (pair[0], -pair[1].scores.final_score, pair[1].article_id)
-            )
+            scored_items.sort(key=lambda pair: (-pair[0].scores.final_score, pair[0].article_id))
             selected = scored_items[: payload.page_size]
+            search_artifact = None
+            if hybrid_index is not None:
+                metadata = hybrid_index.metadata()
+                search_artifact = SearchArtifactDebug(
+                    model_id=str(metadata["model_id"]),
+                    model_revision=str(metadata["model_revision"]),
+                    source_fingerprint=str(metadata["source_fingerprint"]),
+                )
             response = SearchResponse(
                 user_id=payload.user_id,
                 request_id=event.event_id,
                 query_key=query_key,
-                items=[pair[1] for pair in selected],
+                items=[pair[0] for pair in selected],
                 debug=SearchDebugPayload(
                     matched_topics=matched_topics,
-                    result_sources=[pair[2] for pair in selected],
+                    result_sources=[pair[1] for pair in selected],
+                    retrieval_mode=self._settings.search_retrieval_mode,
+                    resolution_source=resolution.source,
+                    resolution_confidence=round(resolution.confidence, 6),
+                    artifact=search_artifact,
                 )
                 if payload.debug
                 else None,

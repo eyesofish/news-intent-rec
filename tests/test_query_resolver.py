@@ -5,9 +5,10 @@ from typing import Any
 
 import pytest
 
-from backend.app.errors import UnresolvedQueryError
+from backend.app.errors import SearchIndexNotReadyError, UnresolvedQueryError
 from backend.app.repositories._utils import is_numeric_query_key
-from backend.app.repositories.query_resolver import resolve_query_key
+from backend.app.repositories.query_resolver import resolve_query_key, resolve_search_query
+from backend.app.search_retrieval import HybridHit, HybridSearchResult
 
 
 class FakeCursor:
@@ -57,6 +58,16 @@ class FakeConnection:
 
     def cursor(self) -> FakeCursor:
         return self._cursor
+
+
+class FakeHybridIndex:
+    def __init__(self, result: HybridSearchResult) -> None:
+        self.result = result
+        self.queries: list[tuple[str, int]] = []
+
+    def search(self, query_text: str, *, limit: int) -> HybridSearchResult:
+        self.queries.append((query_text, limit))
+        return self.result
 
 
 # ── is_numeric_query_key ────────────────────────────────────────────────────
@@ -259,3 +270,156 @@ def test_resolve_display_query_tiebreaker_picks_lowest_query_key():
     resolve_query_key(connection, None, query_text="Falafel")
     sql, _ = connection._cursor.executed[0]
     assert "ORDER BY row_count DESC, query_key ASC" in sql
+
+
+def test_hybrid_mode_preserves_exact_alias_without_loading_candidates():
+    connection = FakeConnection(script=[[{"query_key": "250", "row_count": 1}]])
+    index = FakeHybridIndex(
+        HybridSearchResult(
+            accepted=False,
+            hits=(),
+            top_dense_score=0.0,
+            top_bm25_score=0.0,
+            fusion_margin=0.0,
+        )
+    )
+
+    resolution = resolve_search_query(
+        connection,
+        None,
+        "football_nfl",
+        retrieval_mode="hybrid_v1",
+        hybrid_index=index,  # type: ignore[arg-type]
+    )
+
+    assert resolution.query_key == "250"
+    assert resolution.source == "exact_alias"
+    assert index.queries == []
+
+
+def test_hybrid_mode_maps_article_hits_to_canonical_query_key():
+    hit = HybridHit(
+        article_id=42,
+        bm25_score=12.0,
+        dense_score=0.7,
+        fusion_score=0.03,
+        bm25_rank=1,
+        dense_rank=1,
+    )
+    connection = FakeConnection(
+        script=[
+            [],
+            [],
+            [{"answer_id": 42, "topic_id": 14, "source_rank": 0}],
+            [{"query_key": "14", "topic_id": 14, "score": 1.0, "match_rank": 1}],
+        ]
+    )
+    index = FakeHybridIndex(
+        HybridSearchResult(
+            accepted=True,
+            hits=(hit,),
+            top_dense_score=0.7,
+            top_bm25_score=12.0,
+            fusion_margin=0.01,
+        )
+    )
+
+    resolution = resolve_search_query(
+        connection,
+        None,
+        "football tactics",
+        retrieval_mode="hybrid_v1",
+        hybrid_index=index,  # type: ignore[arg-type]
+        hybrid_limit=50,
+    )
+
+    assert resolution.query_key == "14"
+    assert resolution.source == "hybrid_v1"
+    assert resolution.confidence == pytest.approx(0.7)
+    assert resolution.hybrid_hits == (hit,)
+    assert index.queries == [("football tactics", 50)]
+
+
+def test_hybrid_mode_falls_back_to_top_hit_topic_when_alias_map_is_missing():
+    top_hit = HybridHit(
+        article_id=42,
+        bm25_score=12.0,
+        dense_score=0.7,
+        fusion_score=0.03,
+        bm25_rank=1,
+        dense_rank=1,
+    )
+    second_hit = HybridHit(
+        article_id=7,
+        bm25_score=10.0,
+        dense_score=0.6,
+        fusion_score=0.02,
+        bm25_rank=2,
+        dense_rank=2,
+    )
+    connection = FakeConnection(
+        script=[
+            [],
+            [],
+            [
+                {"answer_id": 7, "topic_id": 2, "source_rank": 0},
+                {"answer_id": 42, "topic_id": 14, "source_rank": 0},
+            ],
+            [],
+        ]
+    )
+    index = FakeHybridIndex(
+        HybridSearchResult(
+            accepted=True,
+            hits=(top_hit, second_hit),
+            top_dense_score=0.7,
+            top_bm25_score=12.0,
+            fusion_margin=0.01,
+        )
+    )
+
+    resolution = resolve_search_query(
+        connection,
+        None,
+        "football tactics",
+        retrieval_mode="hybrid_v1",
+        hybrid_index=index,  # type: ignore[arg-type]
+    )
+
+    assert resolution.query_key == "14"
+    assert resolution.source == "hybrid_v1"
+
+
+def test_hybrid_mode_rejects_low_confidence_query():
+    connection = FakeConnection(script=[[], []])
+    index = FakeHybridIndex(
+        HybridSearchResult(
+            accepted=False,
+            hits=(),
+            top_dense_score=0.2,
+            top_bm25_score=3.0,
+            fusion_margin=0.0,
+        )
+    )
+
+    with pytest.raises(UnresolvedQueryError):
+        resolve_search_query(
+            connection,
+            None,
+            "kubernetes ingress controller",
+            retrieval_mode="hybrid_v1",
+            hybrid_index=index,  # type: ignore[arg-type]
+        )
+
+
+def test_hybrid_mode_requires_loaded_index_after_exact_alias_miss():
+    connection = FakeConnection(script=[[], []])
+
+    with pytest.raises(SearchIndexNotReadyError):
+        resolve_search_query(
+            connection,
+            None,
+            "football tactics",
+            retrieval_mode="hybrid_v1",
+            hybrid_index=None,
+        )

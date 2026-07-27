@@ -4,7 +4,14 @@ import math
 
 import pytest
 
-from backend.app.evaluate import TimeSplit, ndcg_at_k, recall_at_k, time_split
+from backend.app.evaluate import (
+    TimeSplit,
+    graded_ndcg_at_k,
+    mrr_at_k,
+    ndcg_at_k,
+    recall_at_k,
+    time_split,
+)
 
 # ---------------------------- recall_at_k ----------------------------
 
@@ -66,6 +73,18 @@ def test_ndcg_returns_zero_when_relevant_empty():
 
 def test_ndcg_returns_zero_when_k_is_zero():
     assert ndcg_at_k([1, 2, 3], [1], k=0) == 0.0
+
+
+def test_graded_ndcg_rewards_highly_relevant_items_first():
+    relevance = {1: 2.0, 2: 1.0}
+
+    assert graded_ndcg_at_k([1, 2], relevance, k=2) == pytest.approx(1.0)
+    assert graded_ndcg_at_k([2, 1], relevance, k=2) < 1.0
+
+
+def test_mrr_at_k_uses_first_relevant_rank():
+    assert mrr_at_k([9, 8, 3, 2], [2, 3], k=4) == pytest.approx(1 / 3)
+    assert mrr_at_k([9, 8, 3, 2], [2, 3], k=2) == 0.0
 
 
 # ---------------------------- time_split ----------------------------

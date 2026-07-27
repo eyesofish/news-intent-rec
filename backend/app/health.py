@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from typing import Any, cast
 
 from backend.app.config import Settings
@@ -11,6 +12,10 @@ from backend.app.events.worker_state import (
 )
 from backend.app.repositories.connection import connect, parse_database_url
 from backend.app.schemas.common import DependencyHealth, HealthResponse
+from backend.app.search_retrieval import (
+    SearchArtifactError,
+    load_hybrid_search_index,
+)
 
 
 def repository_backend_name(settings: Settings) -> str:
@@ -30,6 +35,7 @@ def build_liveness(settings: Settings) -> HealthResponse:
             "mysql": DependencyHealth(status="disabled"),
             "kafka": DependencyHealth(status="disabled"),
             "outbox": DependencyHealth(status="disabled"),
+            "search_index": DependencyHealth(status="disabled"),
         },
         outbox=None,
     )
@@ -43,6 +49,29 @@ def check_readiness(settings: Settings) -> HealthResponse:
     worker_rows: list[dict[str, Any]] = []
     oldest_outbox_age = 0
     ready = True
+
+    if settings.search_retrieval_mode == "hybrid_v1":
+        try:
+            index = load_hybrid_search_index(
+                Path(settings.search_index_dir),
+                expected_source_fingerprint=settings.search_source_fingerprint,
+            )
+            search_metadata = index.metadata()
+            dependencies["search_index"] = DependencyHealth(
+                status="ok",
+                detail=(
+                    f"documents={search_metadata.get('document_count')}, "
+                    f"model={search_metadata.get('model_id')}"
+                ),
+            )
+        except SearchArtifactError as exc:
+            dependencies["search_index"] = DependencyHealth(
+                status="error",
+                detail=str(exc),
+            )
+            ready = False
+    else:
+        dependencies["search_index"] = DependencyHealth(status="disabled")
 
     if not settings.database_configured:
         dependencies["mysql"] = DependencyHealth(

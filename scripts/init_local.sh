@@ -127,10 +127,20 @@ fi
 export NEWSREC_DATABASE_URL="$database_url"
 export NEWSREC_DEMO_SEED_DIR="${NEWSREC_DEMO_SEED_DIR:-build/mind_demo_world}"
 export NEWSREC_SPONSORED_ENABLED="${NEWSREC_SPONSORED_ENABLED:-${ZHIHUREC_SPONSORED_ENABLED:-1}}"
+export NEWSREC_SEARCH_RETRIEVAL_MODE="${NEWSREC_SEARCH_RETRIEVAL_MODE:-hybrid_v1}"
+export NEWSREC_SEARCH_INDEX_DIR="${NEWSREC_SEARCH_INDEX_DIR:-build/mind_search/demo}"
 
 echo "[3/6] Applying schema and demo seed"
 "$python_bin" scripts/apply_demo_mysql.py
 "$python_bin" scripts/reset_demo_user.py
+if [[ "$NEWSREC_SEARCH_RETRIEVAL_MODE" == "hybrid_v1" ]]; then
+  "$python_bin" scripts/build_search_index.py \
+    --corpus demo \
+    --input-dir "$NEWSREC_DEMO_SEED_DIR" \
+    --output-dir "$NEWSREC_SEARCH_INDEX_DIR" \
+    --config evaluation/search_relevance/selected_config.json \
+    --online-config evaluation/search_relevance/online_demo_config.json
+fi
 
 echo "[4/6] Starting backend and workers"
 start_service backend "$python_bin" -m uvicorn backend.app.main:app \

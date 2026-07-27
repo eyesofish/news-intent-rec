@@ -15,8 +15,9 @@ mechanism behavior only and is not evidence of CTR or causal user benefit.
 - real impression-aware negatives and request-level chronological evaluation;
 - ALS + FAISS collaborative recall with explicit unknown-user fallback;
 - LightGBM ranking, popularity/category baselines, and honest negative/positive ablations;
+- exact-alias + BM25 + sentence-transformer/FAISS hybrid search with calibrated rejection;
 - FastAPI + MySQL serving, Outbox/Kafka, idempotent consumers, health and metrics;
-- React feed, English headline/abstract search, source/category labels, personas, and explanations;
+- React feed/search, source/category labels, personas, and explanations;
 - separate full-data model evidence and compact deterministic serving/CI worlds.
 
 ## Current evidence
@@ -39,8 +40,24 @@ was 0.0262, so the project retains that negative result. Official dev known-user
 coverage is 11.44%; unknown-user content/category fallback Recall@10 was 0.5568 on
 8,902 sampled cold-start requests.
 
-Local loopback measurements over 30 calls: feed p50/p95 9.47/14.18 ms; search
-6.01/7.87 ms. These are local demo measurements, not production capacity claims.
+Search relevance uses 48 fixed queries and 1,239 pooled judgments over all 65,238
+normalized articles. Labels are AI-assisted with a user-approved 12-row stratified
+spot-check.
+
+| Search arm | Recall@10 | NDCG@10 | MRR@10 | OOD reject accuracy |
+|---|---:|---:|---:|---:|
+| Legacy lexical | 0.2895 | 0.2854 | 0.3158 | 0.0 |
+| BM25 | 0.6847 | 0.6790 | 0.7444 | 1.0 |
+| Dense | **0.8806** | **0.8319** | **0.8772** | 1.0 |
+| Hybrid | 0.8122 | 0.8131 | 0.8596 | 1.0 |
+
+Hybrid is the default because it passed the frozen rollout gate and was strongest on
+spelling/noise queries. Dense was the strongest overall held-out arm; that negative
+result is retained rather than hidden.
+
+The existing feed loopback measurement was p50/p95 9.47/14.18 ms. Warm in-process
+hybrid retrieval over the 174-document demo index measured 6.433/9.568 ms. These are
+local measurements, not production capacity claims.
 
 ## Data setup
 
@@ -54,6 +71,18 @@ python scripts/download_mind.py --variant small --split all --accept-license --s
 python scripts/inspect_mind.py --variant small
 python scripts/normalize_mind.py
 python scripts/build_mind_demo_world.py
+python scripts/build_search_index.py \
+  --corpus full \
+  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+  --config evaluation/search_relevance/selected_config.json
+python scripts/calibrate_search_relevance.py
+python scripts/eval_search_relevance.py \
+  --config evaluation/search_relevance/selected_config.json
+python scripts/build_search_index.py \
+  --corpus demo \
+  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+  --config evaluation/search_relevance/selected_config.json \
+  --online-config evaluation/search_relevance/online_demo_config.json
 python scripts/import_demo_world.py \
   --input-dir build/mind_demo_world \
   --output-sql build/mind_demo_world/import_demo_world.sql \
@@ -99,6 +128,9 @@ MySQL and Kafka integration jobs run in `.github/workflows/ci.yml`.
 | Recommendation metrics | `docs/metrics.md` |
 | Machine-readable recommendation evidence | `docs/metrics/mind_recommendation.json` |
 | Search mechanism evidence | `docs/metrics/mind_intent_mechanism.json` |
+| Search relevance evaluation | `docs/search_relevance.md` |
+| Machine-readable search evidence | `docs/metrics/mind_search_relevance.json` |
+| Hybrid search interview deep dive | `docs/search_hybrid_interview.md` |
 | API and event contract | `docs/api_contract.md` |
 | Local operations | `docs/local_runbook.md` |
 | Product/HCI walkthrough | `docs/hci_report.md` |

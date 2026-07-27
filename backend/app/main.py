@@ -14,6 +14,7 @@ from backend.app.config import get_settings
 from backend.app.errors import (
     IdempotencyConflictError,
     RepositoryNotReadyError,
+    SearchIndexNotReadyError,
     UnresolvedQueryError,
 )
 from backend.app.events.publisher import EventPublishError
@@ -144,6 +145,20 @@ def create_app() -> FastAPI:
                 "detail": str(exc),
                 "error_code": "unresolved_query",
                 "query_input": exc.query_input,
+                "path": request.url.path,
+            },
+        )
+
+    @app.exception_handler(SearchIndexNotReadyError)
+    async def search_index_not_ready_handler(
+        request: Request,
+        exc: SearchIndexNotReadyError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": str(exc),
+                "error_code": "search_index_not_ready",
                 "path": request.url.path,
             },
         )

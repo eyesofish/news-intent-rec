@@ -1,0 +1,25 @@
+{
+  "confidence_counts": {
+    "high": 1025,
+    "medium": 214
+  },
+  "grade_counts": {
+    "0": 1055,
+    "1": 49,
+    "2": 135
+  },
+  "human_review_sample_sha256": "1efdeef7ef1bba7dfac2dcfbb1eba0c0f2c6bf8532c2e75eadb3e7c0e889fc37",
+  "human_review_status": "approved_stratified_spot_check",
+  "human_reviewed_judgment_count": 12,
+  "human_reviewed_query_count": 7,
+  "judgment_count": 1239,
+  "label_source": "ai_assisted_pool",
+  "qrels_sha256": "37d15877d001d4da636646f7627c68e0cd2e9de324631b97a46096f6a0104b50",
+  "query_count": 48,
+  "source_label_files": [
+    "labels_q01_q12.jsonl",
+    "labels_q13_q24.jsonl",
+    "labels_q25_q36.jsonl",
+    "labels_q37_q48.jsonl"
+  ]
+}

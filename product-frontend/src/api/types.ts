@@ -77,7 +77,9 @@ export interface FeedResponse {
 
 export interface SearchItemScores {
   topic_match_score: number;
-  hot_backfill_score: number;
+  bm25_score: number;
+  dense_score: number;
+  hybrid_score: number;
   final_score: number;
 }
 

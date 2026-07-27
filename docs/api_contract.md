@@ -32,9 +32,15 @@ Feed and search items use:
 `include_sponsored`, `experiment_arm`, and the evaluation-only `as_of_ts`.
 
 `POST /search` accepts either a normalized `query_key` or English `query_text`.
-Resolution checks category/subcategory aliases and then real MIND headline/abstract
-matches. Unknown input returns 422 `unresolved_query`; it never fabricates a category.
-Debug result sources distinguish `topic_lookup`, `lexical_match`, and `hot_backfill`.
+Numeric keys and exact category/subcategory aliases use the deterministic topic path.
+Other free text uses BM25 plus sentence-transformer/FAISS retrieval and weighted RRF.
+Only high-confidence candidates are returned; search never fills a short page with hot
+articles. Low-confidence input returns 422 `unresolved_query`. Missing, corrupt, stale,
+or locally unavailable hybrid artifacts return 503 `search_index_not_ready`.
+
+Search score fields are `topic_match_score`, `bm25_score`, `dense_score`,
+`hybrid_score`, and `final_score`. Debug output includes retrieval mode, resolution
+source/confidence, result provenance, matched topics, and model artifact identity.
 
 Unified product events use:
 

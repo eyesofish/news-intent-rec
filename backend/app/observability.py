@@ -51,6 +51,16 @@ OUTBOX_ROWS = Gauge(
     "Current outbox rows by status.",
     ("status",),
 )
+SEARCH_RESOLUTIONS = Counter(
+    "newsrec_search_resolutions_total",
+    "Search query resolution outcomes.",
+    ("mode", "source", "outcome"),
+)
+SEARCH_RETRIEVAL_DURATION = Histogram(
+    "newsrec_search_retrieval_duration_seconds",
+    "Search query resolution and retrieval duration.",
+    ("mode",),
+)
 
 
 class JsonLogFormatter(logging.Formatter):

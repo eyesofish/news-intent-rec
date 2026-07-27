@@ -12,6 +12,9 @@ state, sponsored delivery, health, and observability.
   schema-v2 content-ID messages.
 - LightGBM and ALS artifacts under `build/mind_models` are optional and
   schema/fingerprint validated.
+- Hybrid search artifacts under `build/mind_search/demo` contain BM25 corpus data,
+  normalized MiniLM embeddings, a FAISS index, model revision, hashes, and the selected
+  rejection/fusion configuration.
 
 Main API groups:
 

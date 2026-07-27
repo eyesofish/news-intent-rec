@@ -45,6 +45,8 @@ logs/
 /build/mind_demo_world/
 /build/mind_demo_fixture/
 /build/mind_models/
+/build/mind_search/
+/build/search_eval/
 
 # Generated offline build artifacts and import packages
 /.grill/

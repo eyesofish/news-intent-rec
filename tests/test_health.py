@@ -54,3 +54,25 @@ def test_unmatched_paths_use_bounded_metrics_label(unwired_client):
     assert 'path="__unmatched__"' in metrics
     assert 'path="/not-found/one"' not in metrics
     assert 'path="/not-found/two"' not in metrics
+
+
+def test_readiness_reports_missing_hybrid_search_index(monkeypatch):
+    from backend.app.config import Settings
+    from backend.app.health import check_readiness
+    from backend.app.search_retrieval import SearchArtifactError
+
+    def fail_load(*_args, **_kwargs):
+        raise SearchArtifactError("missing search artifact files: metadata.json")
+
+    monkeypatch.setattr("backend.app.health.load_hybrid_search_index", fail_load)
+    readiness = check_readiness(
+        Settings(
+            database_url="",
+            search_retrieval_mode="hybrid_v1",
+            search_index_dir="missing",
+        )
+    )
+
+    assert readiness.status == "error"
+    assert readiness.dependencies["search_index"].status == "error"
+    assert "metadata.json" in str(readiness.dependencies["search_index"].detail)

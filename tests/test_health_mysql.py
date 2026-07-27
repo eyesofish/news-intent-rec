@@ -38,6 +38,7 @@ def test_kafka_readiness_requires_worker_heartbeats(monkeypatch):
     settings = Settings(
         database_url=os.environ["NEWSREC_DATABASE_URL"],
         event_mode="kafka_async",
+        search_retrieval_mode="lexical_v1",
     )
 
     readiness = check_readiness(settings)
