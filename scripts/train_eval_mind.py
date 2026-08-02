@@ -849,11 +849,7 @@ def main() -> None:
             article_category,
         ),
     }
-    if (
-        ranker_scores is not None
-        and ranker_config is not None
-        and ranker_duration is not None
-    ):
+    if ranker_scores is not None and ranker_config is not None and ranker_duration is not None:
         ranker_ranking = _ranking_metrics(
             test_features,
             ranker_scores,
@@ -883,13 +879,15 @@ def main() -> None:
             article_category,
         )
         for metric in COMPARISON_RANKING_METRICS:
-            if round(float(pointwise_request_metrics[metric].mean()), 6) != pointwise_metrics[
-                metric
-            ]:
+            if (
+                round(float(pointwise_request_metrics[metric].mean()), 6)
+                != pointwise_metrics[metric]
+            ):
                 raise RuntimeError(f"Pointwise per-request {metric} does not match aggregate")
-            if round(float(lambdarank_request_metrics[metric].mean()), 6) != lambdarank_metrics[
-                metric
-            ]:
+            if (
+                round(float(lambdarank_request_metrics[metric].mean()), 6)
+                != lambdarank_metrics[metric]
+            ):
                 raise RuntimeError(f"LambdaRank per-request {metric} does not match aggregate")
         bootstrap = _paired_bootstrap_confidence_intervals(
             pointwise_request_metrics,
