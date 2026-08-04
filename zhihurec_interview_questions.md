@@ -17,7 +17,7 @@
 ## 1. Day 1 热身：请求入口、分层与产品契约
 
 1. ⭐ `app = create_app()` 为什么在 import 时就创建应用？
-    - [x] **前置 1.P1** 看懂模块顶层语句会在 `uvicorn backend.app.main:app` 导入时执行（`backend/app/main.py:192`）。
+    - [x] **前置 1.P1** 看懂模块顶层语句会在 `uvicorn backend.app.main:app` 导入时执行（`backend/app/main.py:207`）。
     - [x] **主问 1.Q1** 从 `@router.get("/feed")` 追到 `FeedService.get_feed()`，再追到 repository（`backend/app/routers/feed.py:12`，`backend/app/services/feed.py:11`）。
 2. ⭐ `Depends(get_feed_service)` 注入的值来自哪里？
     - [x] **前置 1.P2** 看懂 `service` 不是前端参数，而是 FastAPI 调用 provider 得到的对象（`backend/app/routers/feed.py:36`）。
@@ -31,6 +31,9 @@
 5. ⭐ 为什么数据库未配置时返回 503，而不是空 feed？
     - [x] **前置 1.P5** 看懂 `UnwiredRuntimeRepository.get_feed()` 主动抛出 `RepositoryNotReadyError`（`backend/app/repositories/unwired.py:29`）。
     - [x] **主问 1.Q5** 解释 success-shaped empty response 会怎样掩盖部署故障，以及 `response_model` 如何稳定正常响应契约（`backend/app/main.py:121`，`backend/app/routers/feed.py:12`）。
+6. ⭐ 整个库一共几张表，`/feed` 这一条请求链路实际摸到哪几张？
+    - [x] **前置 1.P6** 数一遍 `sql/schema.sql` 的 21 张 `CREATE TABLE`，按角色分组：内容本体（`topic`/`author`/`question`/`answer`/`question_topic`/`answer_topic`）、用户与画像（`app_user`/`user_profile`/`system_profile_seed`）、召回辅助（`query_topic_map`/`hot_answer_snapshot`）、广告（`sponsored_campaign`/`sponsored_campaign_topic`/`sponsored_creative`/`sponsored_campaign_daily_state`/`sponsored_user_daily_frequency`/`sponsored_delivery`）、幂等与事件基础设施（`feed_request`/`event_idempotency`/`user_event`/`event_outbox`/`worker_heartbeat`）。
+    - [x] **主问 1.Q6** 结合代码里实际的 `FROM`/`JOIN` 证据（`content_dao.py`、`profile_dao.py`、`sponsored_dao.py`），说清楚 `get_feed()` 真正碰到的表只是这 21 张里的一个子集——`app_user` 只作外键约束、并不会被 `/feed` 查询（它是 `list_personas()` 调试接口在查）；ALS 召回压根不经过 MySQL，是直接读磁盘上的 `.npy`/FAISS 文件。说明"最核心、缺一不可"的是 `answer`+`answer_topic`/`topic`+`user_profile`/`system_profile_seed`+`feed_request` 这四类，并解释它们之间"个性化匹配"是在 Python 里用字典交集算的，不是一条 SQL JOIN（因为 `topic_weights_json` 是 JSON 字段，直接 JOIN 效率不划算）。
 
 > 带读笔记（已讨论）
 >
@@ -63,6 +66,11 @@
 > - 关于失败与成功契约的当前理解：repository 未就绪由全局 handler 返回 503 与 `repository_not_ready`；正常 `/feed` 响应始终经 `FeedResponse` 校验，空结果也必须是合法业务响应而非故障伪装。
 > - 可复用模式：HTTP 状态表达操作是否成功，response schema 表达成功数据形状，两者不能互相替代。
 > - trade-off：显式 503 要求客户端处理错误路径，但能让监控、重试和运维正确识别配置故障。
+> - **【复习 Round 2 薄弱点】1.P1**：误以为 `app = create_app()` 是收到第一个 HTTP 请求时才执行，实际是 `import backend.app.main` 这一刻、模块顶层语句就顺序执行了（`backend/app/main.py:207`）。需要巩固：Python 模块导入 = 从上到下跑一遍脚本，不是只注册函数/类声明。
+> - **【复习 Round 2 薄弱点】1.Q1**：误以为"去掉 Service 层、Router 直接调 Repository"会导致运行时报错（HTTP 500）。实际上 Python/FastAPI 不会在运行时强制检查分层，技术上完全跑得通、不报错；真正的代价是架构层面的——失去统一业务入口，未来跨 repository 编排/权限/实验分流逻辑无处收敛，只能散落进各 Router。分层是约定，不是运行时机制。
+> - 关于全库表结构的当前理解：`sql/schema.sql` 共 21 张表，按角色分内容本体、用户画像、召回辅助、广告、幂等与事件基础设施五组；`/feed` 这一条请求链路实际只碰其中一个子集——`feed_request`/`user_profile`/`system_profile_seed`/`query_topic_map`/`answer`/`answer_topic`/`hot_answer_snapshot`/`user_event`（只读），以及 JOIN 带出的 `topic`/`author`/`question` 展示字段；开启广告再加 `sponsored_*` 一串。`app_user` 只作外键约束，`/feed` 本身不查它；ALS 召回不经过 MySQL，读的是磁盘上的 `.npy`/FAISS 文件。
+> - 可复用模式：最核心、缺一不可的是 `answer`（有什么可推荐）+`answer_topic`/`topic`（内容的话题标签）+`user_profile`/`system_profile_seed`（这个人/这类人喜欢什么）+`feed_request`（防重复处理）四类；其余是叠加在核心链路上的增强层（热门兜底、搜索信号、广告）。个性化匹配（用户话题权重 vs 文章话题集合）是查出来后在 Python 里用字典/集合做交集计算的，不是一条 SQL JOIN——因为话题权重存在 JSON 字段里，MySQL 对 JSON 做关联开销更高，不如各查一次、搬到应用层用字典匹配。
+> - trade-off：把匹配逻辑放到应用层，减少了数据库端复杂 JOIN 的负担，但要求应用层自己保证候选数量可控（`candidate_limit` 封顶），否则大量候选在 Python 里做匹配也会变慢。
 > - 还没展开的问题：§1 已完成；进入 2.P2，理解跨 split 的 request ID namespace。
 
 ## 2. Day 1：MIND 数据语义与确定性归一化
@@ -189,6 +197,9 @@
 5. ⭐ `alpha` 到底在混合什么？
     - [x] **前置 5.P5** 看懂 `compute_alpha()` 从 behavior score 映射到 floor/ceiling 之间（`backend/app/config.py:133`）。
     - [x] **主问 5.Q5** 解释 `alpha * personalized + (1-alpha) * default` 为什么比冷/热用户硬切换更平滑（`backend/app/repositories/mysql.py:209`，`backend/app/repositories/mysql.py:348`）。
+6. ⭐ `default_topic_weight_map`（alpha 混合公式里的"默认画像"）具体是怎么产出来的？
+    - [x] **前置 5.P6** 看懂 `load_default_seed_topic_weights()` 只是按 `seed_key` 查 `system_profile_seed` 这一张独立表（`backend/app/repositories/profile_dao.py:70`），这张表主键是 `seed_key`（字符串），不是 `user_id`，跟 `user_profile` 是两张表、两套主键。
+    - [x] **主问 5.Q6** 解释离线构建脚本（`scripts/mind_demo_pack.py:298-306`）怎么把所有 demo persona 各自的 `topic_weights` 累加、除以总量归一化、只留 top 10，产出这一份"全体平均喜好"种子；以及为什么专门另建一份 `topic_weights=[]` 的 `evaluation_empty` 种子给离线评估用（避免冷启动用户在测试里蹭到全局热门话题的光，把指标虚高）。
 
 > 带读笔记（已讨论）
 >
@@ -224,6 +235,9 @@
 > - 关于连续混合的当前理解：行为证据小幅变化只会平滑改变个性化权重，不会在阈值两侧触发完全不同的排序。
 > - 可复用模式：把默认先验与个体证据按置信度连续融合，适用于冷启动、风险评分和渐进式个性化。
 > - trade-off：平滑混合提升稳定性，却可能稀释成熟用户的强信号；硬切换更纯粹但容易产生边界抖动。
+> - 关于默认画像种子构建的当前理解：`system_profile_seed` 是与 `user_profile` 完全独立的一张表，主键是 `seed_key`（字符串，如 `"cold_start_default"`），不是 `user_id`——它不是一个"假用户"。内容由离线脚本把所有 demo persona 各自的 `topic_weights` 逐话题累加求和，除以总权重归一化成占比，只保留权重最高的前 10 个话题，相当于"全体用户的热门话题分布"，一次性写入这一行，不是实时计算。
+> - 可复用模式：冷启动默认信号可以用"离线预计算 + 运行时查表"的方式提供，避免每次请求现场聚合全量用户数据；缺失时应 fail loudly（`RuntimeError`）而不是静默退化成空画像。
+> - trade-off：另外准备一份 `topic_weights=[]` 的 `evaluation_empty` 种子专供离线评估——避免冷启动用户在测试集里"蹭"全局热门话题光环，把 Recall 指标虚高；生产与评估的冷启动口径故意分开。
 > - 还没展开的问题：进入 6.P1，理解 LightGBM 线上特征名称与顺序为什么必须固定。
 
 ## 6. Day 2：LightGBM 排序与训练/服务特征一致性
@@ -243,6 +257,9 @@
 5. ⭐ 为什么先组装所有 `feature_dicts` 再批量预测？
     - [x] **前置 6.P5** 看懂候选先进入 `feature_dicts`，之后统一调用 model（`backend/app/repositories/mysql.py:281`，`backend/app/repositories/mysql.py:324`）。
     - [x] **主问 6.Q5** 对比 batch inference 与逐 candidate 调用在延迟、特征顺序和错误处理上的差别。
+6. ⭐ `lgb_ranker_v1.txt` 和 `lgb_ranker_v1_meta.json` 分别是什么，别搞混？
+    - [x] **前置 6.P6** 看懂 `.txt` 是 LightGBM 原生序列化格式，真实存了上百棵树的 `split_feature`/`num_leaves`/叶子值（`build/mind_models/lgb_ranker_v1.txt:1-15`），是模型本体，不是"特征"。
+    - [x] **主问 6.Q6** 解释 `.json` 只是这个项目自己写的配套清单——`features` 字段是"名字 → 第几列"的顺序表，不是取值编码，也不含每个特征的业务含义说明；`.txt` 内部其实自带一行 `feature_names=...`，是第二份顺序真相来源，但当前 `load_model()` 没有拿它跟 `meta.json`/`RANKER_FEATURE_COLUMNS` 做交叉校验。
 
 > 带读笔记（已讨论）
 >
@@ -277,6 +294,10 @@
 > - 关于 batch inference 的当前理解：多篇候选先组成多行矩阵，再通过一次 `model.predict(rows)` 返回同顺序的多个分数。
 > - 可复用模式：集中使用共享列顺序构造矩阵、保留输入与业务对象的索引映射，并校验预测数量与候选数量一致。
 > - trade-off：batch 减少固定调用开销并统一特征排列，但单个非法输入可能影响整批；逐篇调用更易隔离错误，却增加延迟并引入部分成功处理。
+> - 关于 model artifact 组成的当前理解：`lgb_ranker_v1.txt` 是 LightGBM Booster 的原生序列化文件，按 `Tree=N` 存储每棵树的 `split_feature`/阈值/叶子值，是模型本体（428KB，上百棵树）；`lgb_ranker_v1_meta.json` 是这个项目自建的元数据契约，核心是 `features` 顺序清单 + `feature_schema_version`，附带 dataset、数据指纹、`training_cutoff_ts`、样本数和 `roc_auc`/`pr_auc`/`log_loss` 等离线指标。
+> - 可复用模式：模型文件负责"怎么算"（树结构和参数），metadata 文件负责"输入该长什么样"（顺序契约 + 版本 + 可复现性指纹），两者职责分离；metadata 是工程约定，不是 LightGBM 强制要求。
+> - trade-off：`.txt` 内部其实自带一行 `feature_names=...`，是第二份顺序真相来源；但当前 `load_model()` 只交叉校验 `meta.json` 与 `RANKER_FEATURE_COLUMNS`，没有再对比模型自带的 `feature_names`，两者未来若不同步会是个隐藏风险点，属于可以主动指出的改进项。
+> - **【复习 Round 2 沟通薄弱点】**：第一次表达时把 `.txt` 文件错说成"它的特征"，混淆了"模型本体"和"喂给模型的特征"两个概念。正确说法：`.txt` 是训练好的模型本体（几百棵树的分裂规则），`.json` 才是特征名字的顺序清单（只管顺序，不含每个特征的业务含义说明）。可直接背的话术："txt 文件是训练好的 LightGBM 模型本身……json 文件不是模型，是一份配套清单，记了训练时用的是哪 16 个特征、按什么顺序排——线上打分必须照这个顺序拼数字喂给模型，顺序错了模型不会报错，但会用错位的数字瞎算，分数全错。"
 > - 还没展开的问题：进入 7.P1，理解 `resolve_query_key()` 对数字查询的快速解析路径。
 
 ### 新 Session 实验计划：Pointwise Classifier vs LambdaRank
@@ -465,6 +486,15 @@
 6. ⭐ 为什么 Kafka consumer 仍必须幂等？
     - [x] **前置 8.P6** 看懂 `ProfileEventApplier.apply_event()` 先 claim，再按 event type 更新，最后写 training outbox（`backend/app/events/consumer.py:68`，`backend/app/events/consumer.py:87`）。
     - [x] **主问 8.Q6** 解释 at-least-once、重复消费、无效消息进 DLQ、暂时性错误重试之间的关系（`backend/app/events/consumer.py:452`，`backend/app/events/consumer.py:459`，`backend/app/events/consumer.py:484`）。
+7. ⭐ `claim_feed_request` 是 feed 级幂等，和事件 fingerprint 是两种不同实现，为什么？
+    - [x] **前置 8.P7** 看懂 `claim_feed_request` 用 `INSERT ... ON DUPLICATE KEY UPDATE` + `cursor.rowcount == 1` 判断"全新请求"还是"重放"（`backend/app/repositories/sponsored_dao.py:65-84`）。
+    - [x] **主问 8.Q7** 解释重放分支为什么还要 `SELECT ... FOR UPDATE` 回读旧参数、和本次参数比对形状（`existing_shape != requested_shape`），不一致就抛 `IdempotencyConflictError` 转 409（`sponsored_dao.py:96-126`，`main.py` 的 `idempotency_conflict_handler`）；以及 `new_feed_request` 这个布尔值下游怎么用来跳过广告重复分配（`mysql.py` 里 `if not new_feed_request: load_sponsored_deliveries_for_request(...)`）。
+8. ⭐ 广告预算/频次的 read-modify-write 为什么必须在同一事务的行锁里做？
+    - [x] **前置 8.P8** 看懂 `sponsored_campaign_daily_state` 主键 `(campaign_id, budget_date)`、`sponsored_user_daily_frequency` 主键 `(campaign_id, user_id, budget_date)`（`sql/schema.sql:276`，`sql/schema.sql:289`），`reserve_sponsored_delivery()` 里两个 `SELECT ... FOR UPDATE` 锁的正是这两行（`sponsored_dao.py:310`，`sponsored_dao.py:367`）。
+    - [x] **主问 8.Q8** 推演没有行锁时两个并发请求同时读到"预算还够"、都通过检查、都写入 delivery、最终合计超预算的竞态；解释为什么这里锁到的是纯 record lock 而非间隔锁（等值命中唯一主键 + upsert 先保证行存在），以及它和 `claim_feed_request` 锁保护的是两类不同并发场景（同一 request_id 重放 vs 不同请求抢同一份共享预算）。
+9. ⭐ 点击事件的 `event_id` 到底跟着什么走？反复点同一篇文章会不会被重复计入画像？
+    - [x] **前置 8.P9** 看懂服务端兜底生成是纯随机 UUID（`new_event_id()` = `f"evt-{uuid.uuid4().hex}"`，`backend/app/events/schema.py:27`），但真实前端并不依赖这个兜底——`product-frontend/src/pages/FeedPage.tsx:109` 客户端自己拼出确定性字符串 `` `click-${user_id}:${requestId}:${articleId}` ``。
+    - [x] **主问 8.Q9** 解释幂等防的是"同一次提交动作被重复发送"，不是"同一篇文章被点了几次"；由于 `event_id` 由 `(user_id, requestId, article_id)` 确定性拼出，同一次 feed 请求（同一个 `requestId`）内重复点同一篇文章会被服务端幂等去重、只算一次，只有换一次新的 `requestId`（下拉刷新/翻页）才会重新计入画像；并说明这属于"应对 at-least-once 网络投递的幂等设计"，和笼统的"防御性编程"不是同一个概念——真正的防御性编程体现在前端 `trackedRef.current`（`FeedPage.tsx:71`）防止同一次渲染重复上报。
 
 > 带读笔记（已讨论）
 >
@@ -504,6 +534,17 @@
 > - 关于消费失败分类的当前理解：at-least-once 允许 offset 未提交时重复投递，数据库 claim 让重复消息不重复更新；无法解析或校验失败的消息进入 DLQ 后提交 offset；暂时性依赖错误不提交，按上限重试。
 > - 可复用模式：按“已成功但确认丢失、永久无效、暂时失败”分类消息，分别使用幂等、DLQ 和 retry。
 > - trade-off：提交 DLQ offset 能避免毒消息阻塞分区，但 DLQ 发布本身必须可靠；重试期间该分区后续消息也会等待。
+> - 关于 `claim_feed_request` 幂等的当前理解：靠 `INSERT ... ON DUPLICATE KEY UPDATE`（更新字段设成它自身）配合 `cursor.rowcount == 1` 区分"全新插入"与"命中已有行的空更新"；命中已有行时再 `SELECT ... FOR UPDATE` 回读旧参数，与本次参数逐字段比对，不一致才判定为幂等键复用冲突，抛 `IdempotencyConflictError` → 409。
+> - 可复用模式：这是和 §8.P1-P2 事件 fingerprint 不同的第二种幂等实现——用数据库唯一键的 upsert 语义原子地区分首次/重放，而不是先查后插；`FOR UPDATE` 顺带把同一 request_id 并发重放也串行化了。
+> - trade-off：`new_feed_request` 这个布尔值继续下传，决定广告分配要不要重新跑；多一次回读比较，换来"同 ID 不同参数"不会被静默吞掉。
+> - 关于广告预算/频次行锁的当前理解：`sponsored_campaign_daily_state`（主键 `campaign_id+budget_date`）和 `sponsored_user_daily_frequency`（主键 `campaign_id+user_id+budget_date`）各是一行共享计数器；`reserve_sponsored_delivery` 先 upsert 保证行存在，再 `SELECT...FOR UPDATE` 锁住这一行，在同一事务里读余量、判断、`INSERT delivery`、`UPDATE` 累加，锁到事务提交才释放。
+> - 可复用模式：等值命中一个已保证存在的唯一键，InnoDB 只加纯 record lock，不升级为 gap lock/next-key lock；把"确保行存在"的 upsert 放在锁之前，是刻意把锁的范围收窄到最小，不同 campaign/不同用户之间互不阻塞。
+> - trade-off：这把锁和 `claim_feed_request` 的锁保护的是两类并发——一个防"同一 request_id 被重放"，一个防"不同请求抢同一份共享预算/频次"；热点 campaign 会有请求排队，但正确性优先于极端并发吞吐。
+> - 关于点击 `event_id` 的当前理解：服务端兜底生成（`new_event_id()`）是纯随机 UUID，跟内容无关；但真实前端 `product-frontend/src/pages/FeedPage.tsx:109` 并不依赖这个兜底，而是自己拼一个确定性字符串 `click-{user_id}:{requestId}:{articleId}`。
+> - 可复用模式：幂等 key 可以是纯随机 token（只负责"认出同一次提交"），也可以是从业务字段确定性拼出来的字符串（额外获得"同一范围内自动去重"的效果）；本项目前端选择了后者，把"同一页 feed 内重复点同一篇文章"也顺带去重了。
+> - trade-off：这个设计意味着"同一 `requestId`（同一页 feed）内重复点同一篇文章只算一次"，只有拿到新的 `requestId`（下拉刷新/翻页）才会重新计入画像——这是产品行为，不是 bug；但也意味着无法单纯从 event_id 本身判断"这是不是同一次真实点击"，必须结合 `requestId` 的语义一起理解。
+> - **【复习 Round 2 薄弱点】**：口头断言"用户真实分开点击同一篇文章 N 次，每次都独立计入画像"时，没有先查前端代码就下结论，属于臆断。正确认知：是否被去重取决于是否共享同一个 `requestId`，不能脱离前端实现空谈后端幂等的效果。教训：涉及"客户端具体怎么做"的判断，必须先查前端代码，不能只靠后端的通用容错设计去反推。
+> - 关于"幂等设计"与"防御性编程"的当前理解：服务端 claim+fingerprint 校验更准确的定位是"应对 at-least-once 网络投递的幂等设计"，这是分布式系统可靠性范畴；前端 `trackedRef.current`（`FeedPage.tsx:71`）防止同一次渲染/effect 重复触发上报，这部分才是经典意义上的防御性编程。两者不是同一个概念，面试时应分开讲更准确。
 > - 还没展开的问题：进入 9.P1，观察前端 impression 去重 identity。
 
 ## 9. Day 3：产品闭环、质量门槛与高压追问
