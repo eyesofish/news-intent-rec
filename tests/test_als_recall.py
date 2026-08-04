@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from backend.app.repositories.als_recall import ALSRecall
 
@@ -17,6 +18,7 @@ def test_faiss_recall_matches_numpy_inner_product(tmp_path: Path):
             [1.0, 0.0],
             [0.0, 1.0],
             [1.0, 1.0],
+            [0.0, 0.0],
         ],
         dtype=np.float32,
     )
@@ -33,8 +35,8 @@ def test_faiss_recall_matches_numpy_inner_product(tmp_path: Path):
     (tmp_path / "als_item_id_map.json").write_text(
         json.dumps(
             {
-                "index_to_id": [301, 302, 303],
-                "id_to_index": {"301": 0, "302": 1, "303": 2},
+                "index_to_id": [301, 302, 303, 304],
+                "id_to_index": {"301": 0, "302": 1, "303": 2, "304": 3},
             }
         ),
         encoding="utf-8",
@@ -44,10 +46,19 @@ def test_faiss_recall_matches_numpy_inner_product(tmp_path: Path):
         encoding="utf-8",
     )
 
-    results = ALSRecall(str(tmp_path)).get_candidates(7248, k=3)
+    recall = ALSRecall(str(tmp_path))
+    results = recall.get_candidates(7248, k=4)
     expected_order = list(np.argsort(-(item_embeddings @ user_embeddings[0])))
 
     assert [answer_id for answer_id, _ in results] == [
-        [301, 302, 303][index] for index in expected_order
+        [301, 302, 303, 304][index] for index in expected_order
     ]
-    assert ALSRecall(str(tmp_path)).get_candidates(999999, k=3) == []
+    assert recall.get_candidates(999999, k=3) == []
+    assert recall.item_cosine_similarity(301, 303) == pytest.approx(2**-0.5)
+    assert recall.item_cosine_similarity(301, 302) == pytest.approx(0.0)
+    assert recall.item_cosine_similarity(301, 304) is None
+    assert recall.item_cosine_similarity(301, 999999) is None
+
+
+def test_item_similarity_returns_none_without_artifacts(tmp_path: Path):
+    assert ALSRecall(str(tmp_path)).item_cosine_similarity(301, 302) is None

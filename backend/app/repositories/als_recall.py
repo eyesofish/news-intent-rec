@@ -26,7 +26,9 @@ class ALSRecall:
         self._meta_path = base / "als_meta.json"
 
         self._user_id_map: dict[int, int] = {}
+        self._item_id_map: dict[int, int] = {}
         self._index_to_item: dict[int, int] = {}
+        self._item_norms: np.ndarray | None = None
         self._loaded = False
         self._signature: tuple[int, ...] | None = None
         self._metadata: dict[str, object] = {}
@@ -61,6 +63,11 @@ class ALSRecall:
 
         item_data = json.loads(self._item_map_path.read_text(encoding="utf-8"))
         self._index_to_item = {i: int(aid) for i, aid in enumerate(item_data["index_to_id"])}
+        self._item_id_map = {
+            int(answer_id): int(index)
+            for answer_id, index in item_data["id_to_index"].items()
+        }
+        self._item_norms = np.linalg.norm(self._item_embeddings, axis=1)
 
         self._metadata = metadata
         self._signature = signature
@@ -95,6 +102,33 @@ class ALSRecall:
             if answer_id is not None:
                 results.append((answer_id, float(dist)))
         return results
+
+    def item_cosine_similarity(
+        self,
+        left_answer_id: int,
+        right_answer_id: int,
+    ) -> float | None:
+        if not self._loaded:
+            self._ensure_loaded()
+        if not self._loaded or self._item_norms is None:
+            return None
+
+        left_index = self._item_id_map.get(left_answer_id)
+        right_index = self._item_id_map.get(right_answer_id)
+        if left_index is None or right_index is None:
+            return None
+
+        denominator = float(self._item_norms[left_index] * self._item_norms[right_index])
+        if denominator <= 0.0:
+            return None
+        similarity = float(
+            np.dot(
+                self._item_embeddings[left_index],
+                self._item_embeddings[right_index],
+            )
+            / denominator
+        )
+        return float(np.clip(similarity, -1.0, 1.0))
 
 
 _ALS: ALSRecall | None = None

@@ -67,3 +67,16 @@ def test_openapi_exposes_only_article_product_fields(unwired_client):
     }
     for schema in document["components"]["schemas"].values():
         assert forbidden.isdisjoint(schema.get("properties", {}))
+
+
+def test_mmr_feed_arm_is_accepted_by_the_api_contract(unwired_client):
+    response = unwired_client.get(
+        "/feed",
+        params={
+            "user_id": 7248,
+            "experiment_arm": "lgb_plus_als_plus_search_mmr",
+        },
+    )
+
+    assert response.status_code == 503, response.text
+    assert response.json()["error_code"] == "repository_not_ready"

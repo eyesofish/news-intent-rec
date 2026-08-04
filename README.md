@@ -15,6 +15,7 @@ mechanism behavior only and is not evidence of CTR or causal user benefit.
 - real impression-aware negatives and request-level chronological evaluation;
 - ALS + FAISS collaborative recall with explicit unknown-user fallback;
 - LightGBM ranking, popularity/category baselines, and honest negative/positive ablations;
+- hybrid ALS/topic MMR reranking behind a non-default feed experiment arm;
 - exact-alias + BM25 + sentence-transformer/FAISS hybrid search with calibrated rejection;
 - FastAPI + MySQL serving, Outbox/Kafka, idempotent consumers, health and metrics;
 - React feed/search, source/category labels, personas, and explanations;
@@ -33,12 +34,19 @@ LightGBM uses 20,000 complete train requests and 10,000 complete evaluation requ
 | Popularity | 0.4831 | 0.2541 | 0.2167 |
 | Category-profile manual | 0.5027 | 0.2703 | 0.2334 |
 | LightGBM | **0.5969** | **0.3628** | **0.3293** |
+| LightGBM + MMR (`penalty=0.02`) | 0.5956 | 0.3626 | 0.3296 |
 | ALS-adjusted LightGBM | 0.5967 | 0.3627 | 0.3292 |
 
 ALS did not add sampled Recall@10 beyond LightGBM. Its all-catalog candidate Recall@50
 was 0.0262, so the project retains that negative result. Official dev known-user
 coverage is 11.44%; unknown-user content/category fallback Recall@10 was 0.5568 on
 8,902 sampled cold-start requests.
+
+The selected MMR arm reduced hybrid intra-list similarity@10 from `0.2433` to
+`0.1935` and increased topic coverage@10 from `11.9145` to `12.9051`, while
+Recall@10 changed from `0.5969` to `0.5956` (`-0.00125` absolute, inside the
+predeclared `0.005` guardrail). This is exposed-candidate reranking evidence, not an
+end-to-end candidate-recall, CTR, or causal-lift claim; the arm remains non-default.
 
 Search relevance uses 48 fixed queries and 1,239 pooled judgments over all 65,238
 normalized articles. Labels are AI-assisted with a user-approved 12-row stratified

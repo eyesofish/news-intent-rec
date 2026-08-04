@@ -17,11 +17,26 @@ requests and evaluates on 10,000 complete requests using only real exposed candi
 | Popularity | 0.3028 | 0.4831 | 0.2541 | 0.2167 |
 | Category-profile manual | 0.3325 | 0.5027 | 0.2703 | 0.2334 |
 | LightGBM | **0.4213** | **0.5969** | **0.3628** | **0.3293** |
+| LightGBM + MMR (`penalty=0.02`) | 0.4169 | 0.5956 | 0.3626 | 0.3296 |
 | ALS-adjusted LightGBM | 0.4212 | 0.5967 | 0.3627 | 0.3292 |
 
 ALS candidate Recall@50 is 0.0262. LightGBM exceeded the tested baselines, but ALS did
 not add sampled Recall@10. Pointwise metrics are ROC AUC 0.6719, PR AUC 0.0738, and
 log loss 0.1516.
+
+MMR was swept as a reranker over each request's real exposed candidates. The selected
+`0.02` similarity penalty stayed inside the predeclared Recall@10 absolute-drop
+guardrail of `0.005`:
+
+| Arm | Recall@10 | Category diversity@10 | Topic coverage@10 | Hybrid intra-list similarity@10 |
+|---|---:|---:|---:|---:|
+| LightGBM | 0.5969 | 4.4234 | 11.9145 | 0.2433 |
+| LightGBM + MMR | 0.5956 | 4.8011 | 12.9051 | 0.1935 |
+
+The Recall@10 delta is `-0.00125`; topic coverage increased by `0.9906`, and hybrid
+intra-list similarity fell by `0.0498` (20.5%). This does not establish end-to-end
+candidate recall, online CTR, or causal user benefit, so
+`lgb_plus_als_plus_search_mmr` remains a non-default experiment arm.
 
 Official dev known-user coverage is only 11.44%, so it is not presented as a general
 known-user collaborative benchmark. The content/category fallback reached Recall@10

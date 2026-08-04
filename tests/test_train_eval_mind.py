@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import argparse
+import json
 from collections import Counter
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
+from backend.app.repositories.mmr import mmr_config
 from backend.app.repositories.ranker import build_feature_dict
 from scripts.train_eval_mind import (
     COMPARISON_RANKING_METRICS,
     _build_features,
     _paired_bootstrap_confidence_intervals,
+    _parse_mmr_penalties,
+    _ranking_metrics,
     _request_group_sizes,
     _request_split,
+    _select_mmr_penalty,
 )
 
 
@@ -146,3 +154,129 @@ def test_runtime_base_score_matches_mind_training_formula():
     )
 
     assert features["base_score"] == 0.5
+
+
+def test_mmr_ranking_metrics_improve_topic_coverage_without_recall_loss():
+    frame = pd.DataFrame(
+        [
+            {
+                "request_id": "r1",
+                "article_id": article_id,
+                "label": article_id == 1,
+            }
+            for article_id in range(1, 12)
+        ]
+    )
+    scores = np.asarray([1.0 - article_id / 100 for article_id in range(1, 12)])
+    article_category = {article_id: 1 if article_id <= 10 else 2 for article_id in range(1, 12)}
+    article_topics = {
+        article_id: frozenset({category})
+        for article_id, category in article_category.items()
+    }
+    context = {
+        "article_topics": article_topics,
+        "als_similarity": lambda _left, _right: None,
+    }
+
+    baseline = _ranking_metrics(
+        frame,
+        scores,
+        article_category,
+        **context,
+    )
+    mmr = _ranking_metrics(
+        frame,
+        scores,
+        article_category,
+        mmr_similarity_penalty=0.2,
+        **context,
+    )
+
+    assert mmr["recall@10"] == baseline["recall@10"]
+    assert baseline["topic_coverage@10"] == 1.0
+    assert mmr["topic_coverage@10"] == 2.0
+    assert (
+        float(mmr["hybrid_intra_list_similarity@10"])
+        < float(baseline["hybrid_intra_list_similarity@10"])
+    )
+
+
+def test_select_mmr_penalty_enforces_recall_guardrail_then_minimizes_similarity():
+    baseline = {
+        "recall@10": 0.596,
+        "topic_coverage@10": 4.0,
+        "hybrid_intra_list_similarity@10": 0.4,
+    }
+    sweep = [
+        {
+            "similarity_penalty": 0.1,
+            "metrics": {
+                "recall@10": 0.596,
+                "topic_coverage@10": 5.0,
+                "hybrid_intra_list_similarity@10": 0.3,
+            },
+        },
+        {
+            "similarity_penalty": 0.2,
+            "metrics": {
+                "recall@10": 0.593,
+                "topic_coverage@10": 4.8,
+                "hybrid_intra_list_similarity@10": 0.2,
+            },
+        },
+        {
+            "similarity_penalty": 0.3,
+            "metrics": {
+                "recall@10": 0.590,
+                "topic_coverage@10": 6.0,
+                "hybrid_intra_list_similarity@10": 0.1,
+            },
+        },
+    ]
+
+    selected = _select_mmr_penalty(baseline, sweep)
+
+    assert selected is not None
+    assert selected["similarity_penalty"] == 0.2
+
+
+def test_parse_mmr_penalties_rejects_empty_or_negative_grid():
+    assert _parse_mmr_penalties("0, 0.1, 0.1") == (0.0, 0.1)
+    with pytest.raises(argparse.ArgumentTypeError, match="cannot be empty"):
+        _parse_mmr_penalties("")
+    with pytest.raises(argparse.ArgumentTypeError, match="non-negative"):
+        _parse_mmr_penalties("0,-0.1")
+
+
+def test_online_mmr_penalty_matches_published_selection():
+    root = Path(__file__).resolve().parents[1]
+    metrics = json.loads(
+        (root / "docs" / "metrics" / "mind_recommendation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    config = mmr_config("lgb_plus_als_plus_search_mmr")
+
+    assert config is not None
+    assert config.similarity_penalty == metrics["mmr"]["selected_similarity_penalty"]
+
+
+def test_published_mmr_evidence_passes_diversity_and_recall_gates():
+    root = Path(__file__).resolve().parents[1]
+    report = json.loads(
+        (root / "docs" / "metrics" / "mind_recommendation.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    baseline = report["ranking_arms"]["lightgbm"]
+    selected = report["ranking_arms"]["lightgbm_mmr"]
+    max_recall_drop = float(report["mmr"]["max_absolute_recall@10_drop"])
+
+    assert float(selected["recall@10"]) >= float(baseline["recall@10"]) - max_recall_drop
+    assert float(selected["category_diversity@10"]) > float(
+        baseline["category_diversity@10"]
+    )
+    assert float(selected["topic_coverage@10"]) > float(baseline["topic_coverage@10"])
+    assert float(selected["hybrid_intra_list_similarity@10"]) < float(
+        baseline["hybrid_intra_list_similarity@10"]
+    )

@@ -42,6 +42,7 @@ from backend.app.repositories.event_dao import (
     record_log_only_event,
     record_search_query,
 )
+from backend.app.repositories.mmr import MMRCandidate, mmr_config, rerank_mmr
 from backend.app.repositories.profile_dao import (
     fetch_profile_row,
     load_default_seed_topic_weights,
@@ -176,6 +177,7 @@ class MysqlRuntimeRepository(RuntimeRepository):
                 "default",
                 "lgb_plus_als",
                 "lgb_plus_als_plus_search",
+                "lgb_plus_als_plus_search_mmr",
                 "lgb_plus_als_plus_search_decay_30m",
                 "lgb_plus_als_plus_search_decay_4h",
                 "lgb_plus_als_plus_search_gated_30m_4h",
@@ -474,7 +476,31 @@ class MysqlRuntimeRepository(RuntimeRepository):
                 pair for pair in scored_items if pair[0].article_id not in sponsored_answer_ids
             ]
             organic_limit = max(0, page_size - len(sponsored_items))
-            selected_pairs = organic_pairs[:organic_limit]
+            active_mmr_config = mmr_config(experiment_arm)
+            if active_mmr_config is None:
+                selected_pairs = organic_pairs[:organic_limit]
+            else:
+                als = get_als_recall()
+                mmr_candidates: list[
+                    MMRCandidate[tuple[FeedItem, RecallCandidateDebug]]
+                ] = [
+                    MMRCandidate(
+                        article_id=pair[0].article_id,
+                        relevance=pair[0].scores.final_score,
+                        topic_ids=frozenset(topic.topic_id for topic in pair[0].categories),
+                        value=pair,
+                    )
+                    for pair in organic_pairs
+                ]
+                selected_pairs = [
+                    selection.value
+                    for selection in rerank_mmr(
+                        mmr_candidates,
+                        limit=organic_limit,
+                        similarity_penalty=active_mmr_config.similarity_penalty,
+                        als_similarity=als.item_cosine_similarity,
+                    )
+                ]
             organic_items = [pair[0] for pair in selected_pairs]
             selected_items = blend_fixed_slots(
                 organic_items,

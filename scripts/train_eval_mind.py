@@ -22,6 +22,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backend.app.repositories.mmr import (  # noqa: E402
+    ItemSimilarity,
+    MMRCandidate,
+    hybrid_item_similarity,
+    rerank_mmr,
+)
 from backend.app.repositories.ranker import (  # noqa: E402
     FEATURE_SCHEMA_VERSION,
     RANKER_FEATURE_COLUMNS,
@@ -37,10 +43,37 @@ COMPARISON_RANKING_METRICS = (
 )
 PAIRED_BOOTSTRAP_ITERATIONS = 2_000
 PAIRED_BOOTSTRAP_SEED = 42
+MMR_MAX_RECALL_DROP = 0.005
+DEFAULT_MMR_PENALTIES = (
+    0.0,
+    0.0025,
+    0.005,
+    0.01,
+    0.015,
+    0.02,
+    0.025,
+    0.03,
+    0.04,
+    0.05,
+    0.075,
+    0.1,
+    0.2,
+    0.3,
+    0.5,
+)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _parse_mmr_penalties(value: str) -> tuple[float, ...]:
+    penalties = tuple(float(item.strip()) for item in value.split(",") if item.strip())
+    if not penalties:
+        raise argparse.ArgumentTypeError("MMR penalty grid cannot be empty")
+    if any(penalty < 0 for penalty in penalties):
+        raise argparse.ArgumentTypeError("MMR penalties must be non-negative")
+    return tuple(dict.fromkeys(penalties))
 
 
 def _request_split(
@@ -326,21 +359,82 @@ def _als_scores(
     return scores
 
 
+def _build_item_cosine_similarity(
+    item_embeddings: np.ndarray,
+    item_map: dict[int, int],
+) -> ItemSimilarity:
+    norms = np.linalg.norm(item_embeddings, axis=1)
+
+    def similarity(left_article_id: int, right_article_id: int) -> float | None:
+        left_index = item_map.get(left_article_id)
+        right_index = item_map.get(right_article_id)
+        if left_index is None or right_index is None:
+            return None
+        denominator = float(norms[left_index] * norms[right_index])
+        if denominator <= 0.0:
+            return None
+        score = float(
+            np.dot(item_embeddings[left_index], item_embeddings[right_index]) / denominator
+        )
+        return float(np.clip(score, -1.0, 1.0))
+
+    return similarity
+
+
 def _ranking_metrics(
     frame: pd.DataFrame,
     scores: np.ndarray,
     article_category: dict[int, int],
+    *,
+    article_topics: dict[int, frozenset[int]] | None = None,
+    als_similarity: ItemSimilarity | None = None,
+    mmr_similarity_penalty: float | None = None,
+    mmr_top_k: int = 10,
 ) -> dict[str, float | int]:
+    if mmr_similarity_penalty is not None and als_similarity is None:
+        raise ValueError("MMR metrics require an ALS similarity callback")
+
     scored = frame[["request_id", "article_id", "label"]].copy()
     scored["score"] = scores
     totals = Counter()
     request_count = 0
     diversity: list[int] = []
+    topic_coverage: list[int] = []
+    intra_list_similarity: list[float] = []
     for _request_id, rows in scored.groupby("request_id", sort=False):
         positives = int(rows["label"].sum())
         if positives <= 0:
             continue
-        ordered = rows.sort_values(["score", "article_id"], ascending=[False, True])
+        base_ordered = rows.sort_values(["score", "article_id"], ascending=[False, True])
+        if mmr_similarity_penalty is None:
+            ordered = base_ordered
+        else:
+            candidates = [
+                MMRCandidate(
+                    article_id=int(row.article_id),
+                    relevance=float(row.score),
+                    topic_ids=(
+                        article_topics.get(int(row.article_id), frozenset())
+                        if article_topics is not None
+                        else frozenset()
+                    ),
+                    value=index,
+                )
+                for index, row in base_ordered.iterrows()
+            ]
+            selected = rerank_mmr(
+                candidates,
+                limit=min(mmr_top_k, len(candidates)),
+                similarity_penalty=mmr_similarity_penalty,
+                als_similarity=als_similarity,
+            )
+            selected_indices = [row.value for row in selected]
+            ordered = pd.concat(
+                [
+                    base_ordered.loc[selected_indices],
+                    base_ordered.drop(index=selected_indices),
+                ]
+            )
         labels = ordered["label"].astype(int).tolist()
         request_count += 1
         for k in (5, 10):
@@ -362,9 +456,39 @@ def _ranking_metrics(
                 }
             )
         )
+        if article_topics is not None:
+            top_article_ids = [
+                int(article_id) for article_id in ordered["article_id"].head(10)
+            ]
+            topic_coverage.append(
+                len(
+                    {
+                        topic_id
+                        for article_id in top_article_ids
+                        for topic_id in article_topics.get(article_id, frozenset())
+                    }
+                )
+            )
+            if als_similarity is not None:
+                pair_similarities = [
+                    hybrid_item_similarity(
+                        left_article_id,
+                        article_topics.get(left_article_id, frozenset()),
+                        right_article_id,
+                        article_topics.get(right_article_id, frozenset()),
+                        als_similarity=als_similarity,
+                    )
+                    for left_index, left_article_id in enumerate(top_article_ids)
+                    for right_article_id in top_article_ids[left_index + 1 :]
+                ]
+                intra_list_similarity.append(
+                    sum(pair_similarities) / len(pair_similarities)
+                    if pair_similarities
+                    else 0.0
+                )
     if request_count == 0:
         return {"requests": 0, "request_failures": 0}
-    return {
+    metrics: dict[str, float | int] = {
         "requests": request_count,
         "recall@5": round(totals["recall@5"] / request_count, 6),
         "recall@10": round(totals["recall@10"] / request_count, 6),
@@ -374,10 +498,57 @@ def _ranking_metrics(
         "category_diversity@10": round(mean(diversity), 6),
         "request_failures": 0,
     }
+    if topic_coverage:
+        metrics["topic_coverage@10"] = round(mean(topic_coverage), 6)
+    if intra_list_similarity:
+        metrics["hybrid_intra_list_similarity@10"] = round(
+            sum(intra_list_similarity) / len(intra_list_similarity),
+            6,
+        )
+    return metrics
 
 
 def mean(values: list[int]) -> float:
     return sum(values) / len(values) if values else 0.0
+
+
+def _select_mmr_penalty(
+    baseline: dict[str, float | int],
+    sweep: list[dict[str, Any]],
+    *,
+    max_recall_drop: float = MMR_MAX_RECALL_DROP,
+) -> dict[str, Any] | None:
+    baseline_recall = float(baseline["recall@10"])
+    baseline_coverage = float(baseline["topic_coverage@10"])
+    baseline_similarity = float(baseline["hybrid_intra_list_similarity@10"])
+    eligible = []
+    for row in sweep:
+        penalty = float(row["similarity_penalty"])
+        metrics = row["metrics"]
+        recall = float(metrics["recall@10"])
+        coverage = float(metrics["topic_coverage@10"])
+        similarity = float(metrics["hybrid_intra_list_similarity@10"])
+        diversity_improved = (
+            similarity < baseline_similarity - 1e-9
+            or coverage > baseline_coverage + 1e-9
+        )
+        if (
+            penalty > 0.0
+            and recall >= baseline_recall - max_recall_drop
+            and diversity_improved
+        ):
+            eligible.append(row)
+    if not eligible:
+        return None
+    return min(
+        eligible,
+        key=lambda row: (
+            float(row["metrics"]["hybrid_intra_list_similarity@10"]),
+            -float(row["metrics"]["topic_coverage@10"]),
+            -float(row["metrics"]["recall@10"]),
+            float(row["similarity_penalty"]),
+        ),
+    )
 
 
 def _request_ranking_metric_frame(
@@ -622,6 +793,12 @@ def main() -> None:
     parser.add_argument("--als-iterations", type=int, default=10)
     parser.add_argument("--lgb-estimators", type=int, default=120)
     parser.add_argument(
+        "--mmr-penalties",
+        type=_parse_mmr_penalties,
+        default=DEFAULT_MMR_PENALTIES,
+        help="Comma-separated MMR similarity penalties to evaluate.",
+    )
+    parser.add_argument(
         "--compare-lgb-objectives",
         action="store_true",
         help="Compare the pointwise classifier with LambdaRank on the same request split.",
@@ -700,6 +877,19 @@ def main() -> None:
     article_category = {
         int(row.article_id): int(row.category_topic_id) for row in articles.itertuples(index=False)
     }
+    article_topics = {
+        int(row.article_id): frozenset(
+            {
+                int(row.category_topic_id),
+                int(row.subcategory_topic_id),
+            }
+        )
+        for row in articles.itertuples(index=False)
+    }
+    als_item_similarity = _build_item_cosine_similarity(
+        model.item_factors.astype(np.float32),
+        item_map,
+    )
     category_article_counts = Counter(article_category.values())
     total_category_articles = sum(category_article_counts.values()) or 1
     default_topic_weights = {
@@ -822,33 +1012,94 @@ def main() -> None:
     )
     als_raw = _als_scores(test_features, model, user_map, item_map)
     als_normalized = 1.0 / (1.0 + np.exp(-np.clip(als_raw, -20.0, 20.0)))
+    ranking_metric_context = {
+        "article_topics": article_topics,
+        "als_similarity": als_item_similarity,
+    }
     arms = {
         "popularity": _ranking_metrics(
             test_features,
             popularity_scores,
             article_category,
+            **ranking_metric_context,
         ),
         "category_profile_manual": _ranking_metrics(
             test_features,
             manual_scores,
             article_category,
+            **ranking_metric_context,
         ),
         "als_recall_manual": _ranking_metrics(
             test_features,
             manual_scores + als_normalized * 0.15,
             article_category,
+            **ranking_metric_context,
         ),
         "als_recall_lightgbm": _ranking_metrics(
             test_features,
             probabilities + als_normalized * 0.15,
             article_category,
+            **ranking_metric_context,
         ),
         "lightgbm": _ranking_metrics(
             test_features,
             probabilities,
             article_category,
+            **ranking_metric_context,
         ),
     }
+    mmr_sweep = [
+        {
+            "similarity_penalty": penalty,
+            "metrics": (
+                arms["lightgbm"]
+                if penalty == 0.0
+                else _ranking_metrics(
+                    test_features,
+                    probabilities,
+                    article_category,
+                    mmr_similarity_penalty=penalty,
+                    **ranking_metric_context,
+                )
+            ),
+        }
+        for penalty in args.mmr_penalties
+    ]
+    baseline_mmr_metrics = arms["lightgbm"]
+    for row in mmr_sweep:
+        row_metrics = row["metrics"]
+        recall_delta = float(row_metrics["recall@10"]) - float(
+            baseline_mmr_metrics["recall@10"]
+        )
+        coverage_delta = float(row_metrics["topic_coverage@10"]) - float(
+            baseline_mmr_metrics["topic_coverage@10"]
+        )
+        similarity_delta = float(
+            row_metrics["hybrid_intra_list_similarity@10"]
+        ) - float(baseline_mmr_metrics["hybrid_intra_list_similarity@10"])
+        row["recall@10_delta_vs_lightgbm"] = round(recall_delta, 6)
+        row["topic_coverage@10_delta_vs_lightgbm"] = round(coverage_delta, 6)
+        row["hybrid_intra_list_similarity@10_delta_vs_lightgbm"] = round(
+            similarity_delta,
+            6,
+        )
+        row["recall_guardrail_pass"] = recall_delta >= -MMR_MAX_RECALL_DROP
+        row["diversity_improved"] = similarity_delta < 0.0 or coverage_delta > 0.0
+    selected_mmr = _select_mmr_penalty(arms["lightgbm"], mmr_sweep)
+    if selected_mmr is not None:
+        arms["lightgbm_mmr"] = {
+            **selected_mmr["metrics"],
+            "similarity_penalty": selected_mmr["similarity_penalty"],
+        }
+        mmr_conclusion = (
+            "Selected an MMR penalty that improved offline list diversity while keeping "
+            f"Recall@10 within {MMR_MAX_RECALL_DROP:.3f} absolute of LightGBM."
+        )
+    else:
+        mmr_conclusion = (
+            "No positive MMR penalty both improved the declared diversity metrics and "
+            f"kept Recall@10 within {MMR_MAX_RECALL_DROP:.3f} absolute of LightGBM."
+        )
     if ranker_scores is not None and ranker_config is not None and ranker_duration is not None:
         ranker_ranking = _ranking_metrics(
             test_features,
@@ -1043,7 +1294,28 @@ def main() -> None:
                 dev_unknown,
                 dev_unknown_scores,
                 article_category,
+                **ranking_metric_context,
             ),
+        },
+        "mmr": {
+            "formula": "final_score - similarity_penalty * max_similarity_to_selected",
+            "baseline_arm": "lightgbm",
+            "online_experiment_arm": "lgb_plus_als_plus_search_mmr",
+            "max_absolute_recall@10_drop": MMR_MAX_RECALL_DROP,
+            "penalty_sweep": mmr_sweep,
+            "selected_similarity_penalty": (
+                selected_mmr["similarity_penalty"]
+                if selected_mmr is not None
+                else None
+            ),
+            "selected_metrics": (
+                selected_mmr["metrics"] if selected_mmr is not None else None
+            ),
+            "evidence_boundary": (
+                "MMR is evaluated as a reranker over real exposed candidates. "
+                "This does not establish end-to-end candidate recall or online CTR lift."
+            ),
+            "conclusion": mmr_conclusion,
         },
         "ranking_arms": arms,
         "pointwise": pointwise,
@@ -1078,6 +1350,14 @@ def main() -> None:
     print(
         f"wrote {args.metrics_output}; Recall@10={ml_recall:.6f}; "
         f"known coverage={known_request_coverage:.4f}"
+    )
+    print(
+        "MMR selected penalty="
+        + (
+            f"{float(selected_mmr['similarity_penalty']):.2f}"
+            if selected_mmr is not None
+            else "none"
+        )
     )
     if comparison is not None:
         print(f"wrote {args.comparison_output}")

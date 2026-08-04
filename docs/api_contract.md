@@ -30,6 +30,10 @@ Feed and search items use:
 
 `GET /feed` accepts `user_id`, `page_size`, `debug`, `request_id`,
 `include_sponsored`, `experiment_arm`, and the evaluation-only `as_of_ts`.
+`lgb_plus_als_plus_search_mmr` is a non-default organic-feed experiment arm: it keeps
+`scores.final_score` as the LightGBM relevance score and changes only the returned
+order through hybrid ALS/topic MMR. Sponsored fixed-slot blending remains a
+`default`-arm product behavior.
 
 `POST /search` accepts either a normalized `query_key` or English `query_text`.
 Numeric keys and exact category/subcategory aliases use the deterministic topic path.

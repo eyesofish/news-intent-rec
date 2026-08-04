@@ -21,6 +21,7 @@ LEGACY_SEARCH_CONFIG = SearchSignalConfig(mode="legacy")
 SEARCH_SIGNAL_CONFIGS: dict[FeedExperimentArm, SearchSignalConfig] = {
     "default": LEGACY_SEARCH_CONFIG,
     "lgb_plus_als_plus_search": LEGACY_SEARCH_CONFIG,
+    "lgb_plus_als_plus_search_mmr": LEGACY_SEARCH_CONFIG,
     "lgb_plus_als_plus_search_decay_30m": SearchSignalConfig(
         mode="decay",
         query_half_life_seconds=30 * 60,

@@ -13,6 +13,7 @@ FeedExperimentArm = Literal[
     "manual_plus_als",
     "lgb_plus_als",
     "lgb_plus_als_plus_search",
+    "lgb_plus_als_plus_search_mmr",
     "lgb_plus_als_plus_search_decay_30m",
     "lgb_plus_als_plus_search_decay_4h",
     "lgb_plus_als_plus_search_gated_30m_4h",
