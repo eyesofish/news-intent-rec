@@ -48,6 +48,9 @@ logs/
 /build/mind_search/
 /build/search_eval/
 
+# Research paper PDFs remain local; commit reading notes and source links only.
+/docs/papers/**/*.pdf
+
 # Generated offline build artifacts and import packages
 /.grill/
 
