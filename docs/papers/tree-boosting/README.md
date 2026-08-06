@@ -6,9 +6,8 @@
 
 > Decision Tree -> Random Forest -> Gradient Boosting -> XGBoost -> LightGBM
 
-当前进度（2026-08-05）：已完成决策树前置、Random Forest，以及 Gradient
-Boosting 的函数空间、负梯度、残差和回归树部分；下次从 Section 5
-`Regularization` 继续。
+当前进度（2026-08-06）：已完成决策树前置、Random Forest 和 Friedman
+Gradient Boosting；当前进入 XGBoost。
 
 读每篇论文时只回答五个问题：
 
@@ -17,6 +16,11 @@ Boosting 的函数空间、负梯度、残差和回归树部分；下次从 Sect
 3. 核心算法怎么运行？
 4. 相比上一代方法改进了什么，代价是什么？
 5. 它如何对应到 `zhihurec` 的 LightGBM 排序链路？
+
+阶段笔记：
+
+- `notes/02-gradient-boosting-machine.md`
+- `notes/03-xgboost-vs-lightgbm.md`
 
 ## 0. 前置：决策树基础（20 分钟，不读论文）
 
@@ -60,7 +64,7 @@ Boosting 的函数空间、负梯度、残差和回归树部分；下次从 Sect
 
 - [x] PDF 第 2-4 页：Section 1、1.1、2，理解“参数空间优化”到“函数空间优化”的转变。
 - [x] PDF 第 6-9 页：Gradient Boosting Algorithm 1、Section 4.1 和 4.3。
-- [ ] PDF 第 16 页：Section 5 `Regularization`，重点理解 learning rate 和树数量。
+- [x] PDF 第 16 页：Section 5 `Regularization`，重点理解 learning rate 和树数量。
 
 跳过：L1、Huber、多分类的完整推导，模拟实验和真实数据实验。
 
