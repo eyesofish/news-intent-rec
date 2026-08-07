@@ -481,9 +481,7 @@ class MysqlRuntimeRepository(RuntimeRepository):
                 selected_pairs = organic_pairs[:organic_limit]
             else:
                 als = get_als_recall()
-                mmr_candidates: list[
-                    MMRCandidate[tuple[FeedItem, RecallCandidateDebug]]
-                ] = [
+                mmr_candidates: list[MMRCandidate[tuple[FeedItem, RecallCandidateDebug]]] = [
                     MMRCandidate(
                         article_id=pair[0].article_id,
                         relevance=pair[0].scores.final_score,

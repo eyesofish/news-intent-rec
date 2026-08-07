@@ -79,10 +79,7 @@ def rerank_mmr[T](
         best_index = min(
             remaining,
             key=lambda index: (
-                -(
-                    candidates[index].relevance
-                    - similarity_penalty * max_similarities[index]
-                ),
+                -(candidates[index].relevance - similarity_penalty * max_similarities[index]),
                 -candidates[index].relevance,
                 candidates[index].article_id,
             ),

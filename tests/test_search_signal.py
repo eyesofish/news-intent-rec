@@ -12,10 +12,7 @@ from backend.app.schemas.profile import ProfileRecentQuery
 
 
 def test_mmr_arm_reuses_legacy_search_signal():
-    assert (
-        SEARCH_SIGNAL_CONFIGS["lgb_plus_als_plus_search_mmr"]
-        is LEGACY_SEARCH_CONFIG
-    )
+    assert SEARCH_SIGNAL_CONFIGS["lgb_plus_als_plus_search_mmr"] is LEGACY_SEARCH_CONFIG
 
 
 def test_legacy_search_signal_does_not_decay():

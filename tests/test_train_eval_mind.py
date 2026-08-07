@@ -170,8 +170,7 @@ def test_mmr_ranking_metrics_improve_topic_coverage_without_recall_loss():
     scores = np.asarray([1.0 - article_id / 100 for article_id in range(1, 12)])
     article_category = {article_id: 1 if article_id <= 10 else 2 for article_id in range(1, 12)}
     article_topics = {
-        article_id: frozenset({category})
-        for article_id, category in article_category.items()
+        article_id: frozenset({category}) for article_id, category in article_category.items()
     }
     context = {
         "article_topics": article_topics,
@@ -195,9 +194,8 @@ def test_mmr_ranking_metrics_improve_topic_coverage_without_recall_loss():
     assert mmr["recall@10"] == baseline["recall@10"]
     assert baseline["topic_coverage@10"] == 1.0
     assert mmr["topic_coverage@10"] == 2.0
-    assert (
-        float(mmr["hybrid_intra_list_similarity@10"])
-        < float(baseline["hybrid_intra_list_similarity@10"])
+    assert float(mmr["hybrid_intra_list_similarity@10"]) < float(
+        baseline["hybrid_intra_list_similarity@10"]
     )
 
 
@@ -251,9 +249,7 @@ def test_parse_mmr_penalties_rejects_empty_or_negative_grid():
 def test_online_mmr_penalty_matches_published_selection():
     root = Path(__file__).resolve().parents[1]
     metrics = json.loads(
-        (root / "docs" / "metrics" / "mind_recommendation.json").read_text(
-            encoding="utf-8"
-        )
+        (root / "docs" / "metrics" / "mind_recommendation.json").read_text(encoding="utf-8")
     )
     config = mmr_config("lgb_plus_als_plus_search_mmr")
 
@@ -264,18 +260,14 @@ def test_online_mmr_penalty_matches_published_selection():
 def test_published_mmr_evidence_passes_diversity_and_recall_gates():
     root = Path(__file__).resolve().parents[1]
     report = json.loads(
-        (root / "docs" / "metrics" / "mind_recommendation.json").read_text(
-            encoding="utf-8"
-        )
+        (root / "docs" / "metrics" / "mind_recommendation.json").read_text(encoding="utf-8")
     )
     baseline = report["ranking_arms"]["lightgbm"]
     selected = report["ranking_arms"]["lightgbm_mmr"]
     max_recall_drop = float(report["mmr"]["max_absolute_recall@10_drop"])
 
     assert float(selected["recall@10"]) >= float(baseline["recall@10"]) - max_recall_drop
-    assert float(selected["category_diversity@10"]) > float(
-        baseline["category_diversity@10"]
-    )
+    assert float(selected["category_diversity@10"]) > float(baseline["category_diversity@10"])
     assert float(selected["topic_coverage@10"]) > float(baseline["topic_coverage@10"])
     assert float(selected["hybrid_intra_list_similarity@10"]) < float(
         baseline["hybrid_intra_list_similarity@10"]
