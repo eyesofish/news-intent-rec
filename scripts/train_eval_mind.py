@@ -445,7 +445,6 @@ def _ranking_metrics(
             totals[f"ndcg@{k}"] += dcg / ideal if ideal else 0.0
         first_positive = next(
             (index + 1 for index, label in enumerate(labels) if label),
-
             None,
         )
         totals["mrr"] += 1.0 / first_positive if first_positive else 0.0
