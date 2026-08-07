@@ -7,7 +7,8 @@
 > Decision Tree -> Random Forest -> Gradient Boosting -> XGBoost -> LightGBM
 
 当前进度（2026-08-06）：已完成决策树前置、Random Forest 和 Friedman
-Gradient Boosting；当前进入 XGBoost。
+Gradient Boosting；XGBoost 已读到 Section 4.1 `Column Block for Parallel
+Learning`，下次从 Section 4.2 的缓存优化继续。
 
 读每篇论文时只回答五个问题：
 
@@ -86,12 +87,12 @@ Gradient Boosting；当前进入 XGBoost。
 
 必读：
 
-- [ ] Section 1 `Introduction`。
-- [ ] Section 2.1-2.3：正则化目标、Gradient Tree Boosting、Shrinkage 和列采样。
-- [ ] Section 3.1：树节点的分裂收益如何计算。
-- [ ] Section 3.4：缺失值和稀疏特征如何处理。
-- [ ] Section 4：只读每个小节开头，理解系统优化方向。
-- [ ] Section 7 `Conclusion`。
+- [x] Section 1 `Introduction`。
+- [x] Section 2.1-2.3：正则化目标、Gradient Tree Boosting、Shrinkage 和列采样。
+- [x] Section 3.1：树节点的分裂收益如何计算。
+- [x] Section 3.4：缺失值和稀疏特征如何处理。
+- [ ] Section 4：已读 4.1，继续读后续小节开头，理解系统优化方向。
+- [x] Section 7 `Conclusion`。
 
 跳过：Section 3.3 Weighted Quantile Sketch 的证明和 Section 6 的完整实验。
 
