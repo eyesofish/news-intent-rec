@@ -457,9 +457,7 @@ def _ranking_metrics(
             )
         )
         if article_topics is not None:
-            top_article_ids = [
-                int(article_id) for article_id in ordered["article_id"].head(10)
-            ]
+            top_article_ids = [int(article_id) for article_id in ordered["article_id"].head(10)]
             topic_coverage.append(
                 len(
                     {
@@ -482,9 +480,7 @@ def _ranking_metrics(
                     for right_article_id in top_article_ids[left_index + 1 :]
                 ]
                 intra_list_similarity.append(
-                    sum(pair_similarities) / len(pair_similarities)
-                    if pair_similarities
-                    else 0.0
+                    sum(pair_similarities) / len(pair_similarities) if pair_similarities else 0.0
                 )
     if request_count == 0:
         return {"requests": 0, "request_failures": 0}
@@ -529,14 +525,9 @@ def _select_mmr_penalty(
         coverage = float(metrics["topic_coverage@10"])
         similarity = float(metrics["hybrid_intra_list_similarity@10"])
         diversity_improved = (
-            similarity < baseline_similarity - 1e-9
-            or coverage > baseline_coverage + 1e-9
+            similarity < baseline_similarity - 1e-9 or coverage > baseline_coverage + 1e-9
         )
-        if (
-            penalty > 0.0
-            and recall >= baseline_recall - max_recall_drop
-            and diversity_improved
-        ):
+        if penalty > 0.0 and recall >= baseline_recall - max_recall_drop and diversity_improved:
             eligible.append(row)
     if not eligible:
         return None
@@ -1068,15 +1059,13 @@ def main() -> None:
     baseline_mmr_metrics = arms["lightgbm"]
     for row in mmr_sweep:
         row_metrics = row["metrics"]
-        recall_delta = float(row_metrics["recall@10"]) - float(
-            baseline_mmr_metrics["recall@10"]
-        )
+        recall_delta = float(row_metrics["recall@10"]) - float(baseline_mmr_metrics["recall@10"])
         coverage_delta = float(row_metrics["topic_coverage@10"]) - float(
             baseline_mmr_metrics["topic_coverage@10"]
         )
-        similarity_delta = float(
-            row_metrics["hybrid_intra_list_similarity@10"]
-        ) - float(baseline_mmr_metrics["hybrid_intra_list_similarity@10"])
+        similarity_delta = float(row_metrics["hybrid_intra_list_similarity@10"]) - float(
+            baseline_mmr_metrics["hybrid_intra_list_similarity@10"]
+        )
         row["recall@10_delta_vs_lightgbm"] = round(recall_delta, 6)
         row["topic_coverage@10_delta_vs_lightgbm"] = round(coverage_delta, 6)
         row["hybrid_intra_list_similarity@10_delta_vs_lightgbm"] = round(
@@ -1304,13 +1293,9 @@ def main() -> None:
             "max_absolute_recall@10_drop": MMR_MAX_RECALL_DROP,
             "penalty_sweep": mmr_sweep,
             "selected_similarity_penalty": (
-                selected_mmr["similarity_penalty"]
-                if selected_mmr is not None
-                else None
+                selected_mmr["similarity_penalty"] if selected_mmr is not None else None
             ),
-            "selected_metrics": (
-                selected_mmr["metrics"] if selected_mmr is not None else None
-            ),
+            "selected_metrics": (selected_mmr["metrics"] if selected_mmr is not None else None),
             "evidence_boundary": (
                 "MMR is evaluated as a reranker over real exposed candidates. "
                 "This does not establish end-to-end candidate recall or online CTR lift."

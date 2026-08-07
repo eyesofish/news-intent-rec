@@ -64,8 +64,7 @@ class ALSRecall:
         item_data = json.loads(self._item_map_path.read_text(encoding="utf-8"))
         self._index_to_item = {i: int(aid) for i, aid in enumerate(item_data["index_to_id"])}
         self._item_id_map = {
-            int(answer_id): int(index)
-            for answer_id, index in item_data["id_to_index"].items()
+            int(answer_id): int(index) for answer_id, index in item_data["id_to_index"].items()
         }
         self._item_norms = np.linalg.norm(self._item_embeddings, axis=1)
 
