@@ -16,7 +16,7 @@ Learning`，下次从 Section 4.2 的缓存优化继续。
 2. 输入和输出是什么？
 3. 核心算法怎么运行？
 4. 相比上一代方法改进了什么，代价是什么？
-5. 它如何对应到 `zhihurec` 的 LightGBM 排序链路？
+5. 它如何对应到 NewsIntentRec 的 LightGBM 排序链路？
 
 阶段笔记：
 
@@ -134,7 +134,7 @@ Learning`，下次从 Section 4.2 的缓存优化继续。
 
 > 为什么不能直接把所有梯度小的样本删掉？EFB 又为什么不会让被打包的两个特征相互混淆？
 
-## 5. 映射回 zhihurec（20 分钟）
+## 5. 映射回 NewsIntentRec（20 分钟）
 
 - [ ] 找到 `backend/app/repositories/ranker.py` 的 `RANKER_FEATURE_COLUMNS`。
 - [ ] 找到 `score_candidates()` 如何把具名特征按固定顺序转换成数值矩阵。
